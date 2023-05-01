@@ -55,7 +55,7 @@ def parse_args():
     cfg["verbose"] = args.verbose
     cfg["test_mode"] = args.test
     cfg["overwrite"] = args.yes
-    if args.quality: cfg["quality"] = args.quality
+    if args.quality is not None: cfg["quality"] = args.quality
 
     return cfg
 
@@ -196,6 +196,40 @@ def scan_eng_astream(cfg, video):
     print("INFO: OK: found audio track inside video file", res)
     return res
 
+def scan_vstream(cfg, video):
+    ff_probe_command=["ffprobe",
+                       "-i", video,
+                       "-show_entries", "stream=index",
+                       "-of", "json",
+                       "-v", "panic",
+                       "-select_streams", "v"]
+    if cfg["verbose"]: print(ff_probe_command)
+    res = subprocess.run(ff_probe_command, capture_output=True)
+    if cfg["verbose"]: print(res)
+    if res.returncode != 0:
+        print("ERR: error during ffprobe execution. Unable find video track")
+        return
+
+    jq_filter_command=["jq",
+                       "[.streams[].index][0]",
+                       "-"]
+    if cfg["verbose"]: print(jq_filter_command)
+    res = subprocess.run(jq_filter_command, input=res.stdout, capture_output=True)
+    if cfg["verbose"]: print(res)
+    if res.returncode != 0:
+        print("ERR: error during execution of jq. Unable to find video track")
+        return
+
+    # Strip newline from result
+    res = res.stdout.decode("utf-8").rstrip()
+    if res == "null":
+        print("ERR: cannot find video stream.")
+        return
+
+    res = "0:" + res
+    print("INFO: OK: found video track inside video file", res)
+    return res
+
 def convert_one(cfg, e):
     video = e[2]
     out = splitext(join(cfg["out_dir"], basename(video)))[0] + ".mp4"
@@ -212,6 +246,8 @@ def convert_one(cfg, e):
         print("ERR: no audio stream defined or guessed.")
         return False
 
+    v_stream = scan_vstream(cfg, video)
+
     ffmpeg_command = [
         "ffmpeg",
         "-i", video,
@@ -221,7 +257,7 @@ def convert_one(cfg, e):
         "-c:v", "libx264",
         "-preset", "slower",
         "-crf", str(cfg["quality"]),
-        "-map", "0:0",
+        "-map", v_stream,
 
         # Audio setting
         "-acodec", "copy",
