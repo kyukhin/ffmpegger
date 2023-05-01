@@ -13,7 +13,8 @@ def parse_args():
         "overwrite": False,
         "verbose": False,
         "test_mode": False,
-        "a_stream": None
+        "a_stream": None,
+        "quality": 16
     }
 
     parser = argparse.ArgumentParser()
@@ -29,6 +30,10 @@ def parse_args():
     parser.add_argument("-o", "--output",
                         help="Set output directory",
                         type=str)
+
+    parser.add_argument("-q", "--quality",
+                        help="Set video quality. Google H264's crf for details. Default: 16",
+                        type=int)
 
     parser.add_argument("-t", "--test",
                         help="Do a single conversion",
@@ -50,6 +55,8 @@ def parse_args():
     cfg["verbose"] = args.verbose
     cfg["test_mode"] = args.test
     cfg["overwrite"] = args.yes
+    if args.quality: cfg["quality"] = args.quality
+
     return cfg
 
 def scan_videos(cfg):
@@ -213,7 +220,7 @@ def convert_one(cfg, e):
         # Video setting
         "-c:v", "libx264",
         "-preset", "slower",
-        "-crf", "17",
+        "-crf", str(cfg["quality"]),
         "-map", "0:0",
 
         # Audio setting
@@ -225,7 +232,7 @@ def convert_one(cfg, e):
         ]
     if cfg["overwrite"]:
         ffmpeg_command.append("-y")
-    if cfg["verbose"]: print(ffmpeg_command)
+    print(ffmpeg_command)
     if subprocess.run(ffmpeg_command).returncode == 0:
         print ("OK: FFmpeg finished")
         return True
