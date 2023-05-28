@@ -238,6 +238,13 @@ def scan_vstream(cfg, video):
     print("INFO: OK: found video track inside video file", res)
     return res
 
+# Fixup filenames in a root dir. The function uses config's root dir
+# and walks (top down) through directories and file recursively.
+# During the walk, it renames paths replacing strange characters
+# with dots. It then joins series of dots into single dot make
+# name loo more nicely.
+#
+# Strange symbols are stored in `bad_chars` array.
 def fixup_names(cfg):
     root = cfg["root_dir"]
 
@@ -248,14 +255,24 @@ def fixup_names(cfg):
             copy_f = f
             for char in copy_f:
                 if (char in bad_chars): copy_f = copy_f.replace(char, '.')
+
+            # Replace runs of two and more dots with single dot.
+            copy_f = re.sub('\.\.+', '.', copy_f)
+
             os.rename(os.path.join(path, f),
                       os.path.join(path, copy_f))
+            print("INFO: Renamed", f, "into", copy_f)
         for f in files:
             copy_f = f
             for char in copy_f:
                 if (char in bad_chars): copy_f = copy_f.replace(char, '.')
+
+            # Replace runs of two and more dots with single dot.
+            copy_f = re.sub('\.\.+', '.', copy_f)
+
             os.rename(os.path.join(path, f),
                       os.path.join(path, copy_f))
+            print("INFO: Renamed ", f, "into ", copy_f)
     return
 
 def convert_one(cfg, e):
@@ -311,7 +328,6 @@ def main():
     if cfg["fixup_names"]:
         print("INFO: will try to fixup filenames if needed")
         fixup_names(cfg)
-        return
 
     v_list, s_list = scan_videos(cfg)
 
