@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 
+# TODO: check if jq exists?
+
 import argparse
 import os
 from os.path import basename, getsize, join, splitext
@@ -277,7 +279,6 @@ def convert_one(cfg, e):
     ffmpeg_command = [
         "ffmpeg",
         "-i", video,
-        out,
 
         # Video setting
         "-c:v", "libx264",
@@ -290,7 +291,9 @@ def convert_one(cfg, e):
         "-map", cfg["a_stream"],
 
         # Subs setting
-        "-vf", "subtitles="+subs
+        "-vf", "subtitles="+subs,
+
+        out
         ]
     if cfg["overwrite"]:
         ffmpeg_command.append("-y")
@@ -329,7 +332,10 @@ def main():
     if len(v_list) == 1:
         print("Detected single video. Treat it as a movie")
         # TODO
-        assert len(s_list) == 1
+        if len(s_list) == 0:
+            convert_one(cfg, [0, 0, v_list[0], 0])
+        else:
+            assert len(s_list) == 1
         return
 
     # This is series
