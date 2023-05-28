@@ -8,6 +8,7 @@ import subprocess
 
 def parse_args():
     cfg = {
+        "fixup_names": False,
         "root_dir": os.getcwd(),
         "out_dir": os.getcwd(),
         "overwrite": False,
@@ -26,6 +27,10 @@ def parse_args():
     parser.add_argument("-d", "--directory",
                         help="Scan given directory, instead of current",
                         type=str)
+
+    parser.add_argument("-f", "--fixup_names",
+                        help="Remove special characters from filenames",
+                        action="store_true")
 
     parser.add_argument("-o", "--output",
                         help="Set output directory",
@@ -51,6 +56,7 @@ def parse_args():
 
     cfg["a_stream"] = args.astream
     if args.directory: cfg["root_dir"] = args.directory
+    cfg["fixup_names"] = args.fixup_names
     if args.output: cfg["out_dir"] = args.output
     cfg["verbose"] = args.verbose
     cfg["test_mode"] = args.test
@@ -230,6 +236,26 @@ def scan_vstream(cfg, video):
     print("INFO: OK: found video track inside video file", res)
     return res
 
+def fixup_names(cfg):
+    root = cfg["root_dir"]
+
+    bad_chars = [' ', '(', ')', '[', ']', '\'', '«', '»', ',', '’']
+    os.chdir(root)
+    for path, subdir, files in os.walk(root, topdown=False):
+        for f in subdir:
+            copy_f = f
+            for char in copy_f:
+                if (char in bad_chars): copy_f = copy_f.replace(char, '.')
+            os.rename(os.path.join(path, f),
+                      os.path.join(path, copy_f))
+        for f in files:
+            copy_f = f
+            for char in copy_f:
+                if (char in bad_chars): copy_f = copy_f.replace(char, '.')
+            os.rename(os.path.join(path, f),
+                      os.path.join(path, copy_f))
+    return
+
 def convert_one(cfg, e):
     video = e[2]
     out = splitext(join(cfg["out_dir"], basename(video)))[0] + ".mp4"
@@ -279,6 +305,11 @@ def convert_one(cfg, e):
 def main():
     cfg = parse_args()
 
+    if cfg["fixup_names"]:
+        print("INFO: will try to fixup filenames if needed")
+        fixup_names(cfg)
+        return
+
     v_list, s_list = scan_videos(cfg)
 
     if cfg["verbose"]:
@@ -321,6 +352,6 @@ def main():
         print("INFO: Generic mode, converting whole list")
         for e in e_list:
             convert_one(cfg, e)
-        
+
 if __name__ == '__main__':
     main()
