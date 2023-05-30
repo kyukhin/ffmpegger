@@ -277,6 +277,7 @@ def fixup_names(cfg):
 
 def convert_one(cfg, e):
     video = e[2]
+    astream = cfg["a_stream"]
     out = splitext(join(cfg["out_dir"], basename(video)))[0] + ".mp4"
 
     if not e[3]:
@@ -284,10 +285,10 @@ def convert_one(cfg, e):
     else:
         subs = e[3]
 
-    if not cfg["a_stream"]:
-        cfg["a_stream"] = scan_eng_astream(cfg, video)
+    if not astream:
+        astream = scan_eng_astream(cfg, video)
 
-    if not cfg["a_stream"]:
+    if not astream:
         print("ERR: no audio stream defined or guessed.")
         return False
 
@@ -305,7 +306,7 @@ def convert_one(cfg, e):
 
         # Audio setting
         "-acodec", "copy",
-        "-map", cfg["a_stream"],
+        "-map", astream,
 
         # Subs setting
         "-vf", "subtitles="+subs,
