@@ -31,8 +31,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} \"$1\""
-rsync -e "ssh -i ${VM_KEY}" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} "$1"
+OUT=$1
+if [ -f $OUT ] ; then
+    OUT=`dirname ${OUT}`
+fi
+
+echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} \"${OUT}\""
+rsync -e "ssh -i ${VM_KEY}" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} "${OUT}"
 if [ $? -ne 0 ]; then
     echo "ERR: syncing from VM. Exit."
     exit 1
