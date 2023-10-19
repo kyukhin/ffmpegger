@@ -10,6 +10,7 @@ import subprocess
 
 def parse_args():
     cfg = {
+        "audio_enforce": 0,
         "fixup_names": False,
         "root_dir": os.getcwd(),
         "out_dir": os.getcwd(),
@@ -33,6 +34,10 @@ def parse_args():
     parser.add_argument("-f", "--fixup_names",
                         help="Remove special characters from filenames",
                         action="store_true")
+
+    parser.add_argument("-ae", "--audio_enforce",
+                        help="If failed to guess - use specified track",
+                        type=int)
 
     parser.add_argument("-o", "--output",
                         help="Set output directory",
@@ -59,6 +64,7 @@ def parse_args():
     cfg["a_stream"] = args.astream
     if args.directory: cfg["root_dir"] = args.directory
     cfg["fixup_names"] = args.fixup_names
+    cfg["audio_enforce"] = args.audio_enforce
     if args.output: cfg["out_dir"] = args.output
     cfg["verbose"] = args.verbose
     cfg["test_mode"] = args.test
@@ -90,7 +96,7 @@ def scan_videos(cfg):
                     s_list.append(join(root, fn))
                 else:
                     if cfg["verbose"]: print("not eng :(")
-                    
+
     return v_list, s_list
 
 def analyze_episodes(cfg, v_list, s_list):
@@ -132,7 +138,7 @@ def analyze_episodes(cfg, v_list, s_list):
 
         e_list.append((season, episode, v, subs_file))
         print(regex.findall(v))
-        
+
     return e_list
 
 # Search a video file for English subtitles.
@@ -198,7 +204,11 @@ def scan_eng_astream(cfg, video):
     res = res.stdout.decode("utf-8").rstrip()
     if res == "null":
         print("ERR: cannot find English audio track.")
-        return
+        if cfg["audio_enforce"] == 0:
+            return
+        res = cfg["audio_enforce"]
+        print("INF: enforcing track", res)
+
 
     res = "0:" + res
     print("INFO: OK: found audio track inside video file", res)
