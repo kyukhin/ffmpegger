@@ -206,7 +206,7 @@ def scan_eng_astream(cfg, video):
         print("ERR: cannot find English audio track.")
         if cfg["audio_enforce"] == 0:
             return
-        res = cfg["audio_enforce"]
+        res = str(cfg["audio_enforce"])
         print("INF: enforcing track", res)
 
 
