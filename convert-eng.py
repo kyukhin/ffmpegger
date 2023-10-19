@@ -315,7 +315,7 @@ def convert_one(cfg, e):
         "-map", v_stream,
 
         # Audio setting
-        "-acodec", "copy",
+        "-acodec", "aac",
         "-map", astream,
 
         # Subs setting
