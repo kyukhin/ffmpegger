@@ -317,6 +317,9 @@ def convert_one(cfg, e):
         # Audio setting
         "-acodec", "aac",
         "-map", astream,
+        # TODO: extract into param. These key turns sound into stereo
+        # from, say 5.1. Nothing but mono/stereo can be played on iPhone
+        "-ac", "2",
 
         # Subs setting
         "-vf", "subtitles="+subs,
