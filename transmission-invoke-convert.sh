@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LOG="/tmp/transmission-invoke-convert.log"
+LOG="${HOME}/logs/transmission-invoke-convert.log"
 
 echo "Invoked new convert" >> $LOG
 echo -n "On " >> $LOG
