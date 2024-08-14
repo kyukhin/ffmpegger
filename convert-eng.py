@@ -18,41 +18,46 @@ def parse_args():
         "verbose": False,
         "test_mode": False,
         "a_stream": None,
-        "quality": 16
+        "quality": 16,
+        "size_target": None
     }
 
     parser = argparse.ArgumentParser()
 
     parser.add_argument("-as", "--astream",
-                        help="Do not guess audio track, set it explicitly",
+                        help="Do not guess audio track, set it explicitly.",
                         type=str)
 
     parser.add_argument("-d", "--directory",
-                        help="Scan given directory, instead of current",
+                        help="Scan given directory, instead of current.",
                         type=str)
 
     parser.add_argument("-f", "--fixup_names",
-                        help="Remove special characters from filenames",
+                        help="Remove special characters from filenames.",
                         action="store_true")
 
     parser.add_argument("-ae", "--audio_enforce",
-                        help="If failed to guess - use specified track",
+                        help="If failed to guess - use specified track.",
                         type=int)
 
     parser.add_argument("-o", "--output",
-                        help="Set output directory",
+                        help="Set output directory.",
                         type=str)
 
     parser.add_argument("-q", "--quality",
-                        help="Set video quality. Google H264's crf for details. Default: 16",
+                        help="Set video quality. Google H264's crf for details. Default: 16.",
+                        type=int)
+
+    parser.add_argument("-s", "--size_target",
+                        help="Set target video bitrate in kbs/s.",
                         type=int)
 
     parser.add_argument("-t", "--test",
-                        help="Do a single conversion",
+                        help="Do a single conversion.",
                         action="store_true")
 
     parser.add_argument("-v", "--verbose",
-                        help="Be verbose (TODO: make it integer)",
+                        help="Be verbose (TODO: make it integer).",
                         action="store_true")
 
     parser.add_argument("-y", "--yes",
@@ -70,6 +75,7 @@ def parse_args():
     cfg["test_mode"] = args.test
     cfg["overwrite"] = args.yes
     if args.quality is not None: cfg["quality"] = args.quality
+    if args.size_target is not None: cfg["size_target"] = args.size_target
 
     return cfg
 
@@ -328,13 +334,80 @@ def convert_one(cfg, e):
         ]
     if cfg["overwrite"]:
         ffmpeg_command.append("-y")
-    print(ffmpeg_command)
-    if subprocess.run(ffmpeg_command).returncode == 0:
-        print ("OK: FFmpeg finished")
-        return True
+    if cfg["size_target"]:
+        print("Will do two pass converion as bitrate was specified")
+        ffmpeg_command_1 = [
+            "ffmpeg",
+            "-i", video,
+
+            # Video setting
+            "-c:v", "libx264",
+            "-b:v", str(cfg["size_target"])+"k",
+            "-pass", "1",
+            "-map", v_stream,
+
+            # Audio setting
+            "-acodec", "aac",
+            "-map", astream,
+            # TODO: extract into param. These key turns sound into stereo
+            # from, say 5.1. Nothing but mono/stereo can be played on iPhone
+            "-ac", "2",
+
+            # Subs setting
+            "-vf", "subtitles="+subs,
+
+            "-f", "mp4", # Force format, as /dev/null has no ext.
+            "-y",        # Allow "re-write" /dev/null w/o questions.
+            "/dev/null"]
+
+        ffmpeg_command_2 = [
+            "ffmpeg",
+            "-i", video,
+
+            # Video setting
+            "-c:v", "libx264",
+            "-b:v", str(cfg["size_target"])+"k",
+            "-pass", "2",
+            "-map", v_stream,
+
+            # Audio setting
+            "-acodec", "aac",
+            "-map", astream,
+            # TODO: extract into param. These key turns sound into stereo
+            # from, say 5.1. Nothing but mono/stereo can be played on iPhone
+            "-ac", "2",
+
+            # Subs setting
+            "-vf", "subtitles="+subs,
+
+            out
+        ]
+        print(ffmpeg_command_1)
+        res = subprocess.run(ffmpeg_command_1, capture_output=False)
+        print(res)
+        if res.returncode == 0:
+            print ("OK: FFmpeg pass 1 finished")
+        else:
+            print ("ERR: FFmpeg pass 1 failed")
+            return False
+
+        print(ffmpeg_command_2)
+        res = subprocess.run(ffmpeg_command_2, capture_output=False)
+        print(res)
+        if res.returncode == 0:
+            print ("OK: FFmpeg pass 2 finished")
+            return True
+        else:
+            print ("ERR: FFmpeg pass 2 failed")
+            return False
     else:
-        print ("ERR: FFmpeg failed")
-        return False
+        print(ffmpeg_command)
+        if subprocess.run(ffmpeg_command).returncode == 0:
+            print ("OK: FFmpeg finished")
+            return True
+        else:
+            print ("ERR: FFmpeg failed")
+            return False
 
 def main():
     cfg = parse_args()
