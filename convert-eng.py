@@ -107,7 +107,7 @@ def scan_videos(cfg):
 
 def analyze_episodes(cfg, v_list, s_list):
     e_list = []
-    regex = re.compile("s(\d+)e(\d+)", flags=re.IGNORECASE)
+    regex = re.compile(r"s(\d+)e(\d+)", flags=re.IGNORECASE)
     for v in v_list:
         if cfg["verbose"] : print("Analyzing", v)
         v_pair = regex.findall(v)
@@ -273,7 +273,7 @@ def fixup_names(cfg):
                 if (char in bad_chars): copy_f = copy_f.replace(char, '.')
 
             # Replace runs of two and more dots with single dot.
-            copy_f = re.sub('\.\.+', '.', copy_f)
+            copy_f = re.sub(r'\.\.+', '.', copy_f)
 
             os.rename(os.path.join(path, f),
                       os.path.join(path, copy_f))
@@ -284,7 +284,7 @@ def fixup_names(cfg):
                 if (char in bad_chars): copy_f = copy_f.replace(char, '.')
 
             # Replace runs of two and more dots with single dot.
-            copy_f = re.sub('\.\.+', '.', copy_f)
+            copy_f = re.sub(r'\.\.+', '.', copy_f)
 
             os.rename(os.path.join(path, f),
                       os.path.join(path, copy_f))
