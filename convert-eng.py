@@ -16,6 +16,8 @@ def parse_args():
         "out_dir": os.getcwd(),
         "overwrite": False,
         "verbose": False,
+        "settings_video": None,
+        "settings_subtitles": None,
         "test_mode": False,
         "a_stream": None,
         "quality": 16,
@@ -37,7 +39,7 @@ def parse_args():
                         action="store_true")
 
     parser.add_argument("-ae", "--audio_enforce",
-                        help="If failed to guess - use specified track.",
+                        help="If failed to guess - use specified track number.",
                         type=int)
 
     parser.add_argument("-o", "--output",
@@ -56,6 +58,14 @@ def parse_args():
                         help="Do a single conversion.",
                         action="store_true")
 
+    parser.add_argument("-sv", "--settings_video",
+                        help="Video settings to pass to video filters, for example:",
+                        type=str)
+
+    parser.add_argument("-ss", "--settings_subtitles",
+                        help="Subtitles settings to pass to libass, for example",
+                        type=str)
+
     parser.add_argument("-v", "--verbose",
                         help="Be verbose (TODO: make it integer).",
                         action="store_true")
@@ -72,6 +82,8 @@ def parse_args():
     cfg["audio_enforce"] = args.audio_enforce
     if args.output: cfg["out_dir"] = args.output
     cfg["verbose"] = args.verbose
+    if args.settings_video: cfg["settings_video"] = args.settings_video
+    if args.settings_subtitles: cfg["settings_subtitles"] = args.settings_subtitles
     cfg["test_mode"] = args.test
     cfg["overwrite"] = args.yes
     if args.quality is not None: cfg["quality"] = args.quality
@@ -310,14 +322,22 @@ def convert_one(cfg, e):
 
     v_stream = scan_vstream(cfg, video)
 
-    ffmpeg_command = [
+    if cfg["settings_video"]:
+        vs = cfg["settings_video"]+","
+    else:
+        vs = ""
+
+    vs += "subtitles=" + subs
+    if cfg["settings_subtitles"]:
+        vs += ":" + cfg["settings_subtitles"]
+
+    if cfg["verbose"]: print("DBG: video filter setting:", vs)
+
+    ffmpeg_cmd_common_opts = [
         "ffmpeg",
         "-i", video,
-
         # Video setting
         "-c:v", "libx264",
-        "-preset", "slower",
-        "-crf", str(cfg["quality"]),
         "-map", v_stream,
 
         # Audio setting
@@ -327,63 +347,32 @@ def convert_one(cfg, e):
         # from, say 5.1. Nothing but mono/stereo can be played on iPhone
         "-ac", "2",
 
-        # Subs setting
-        "-vf", "subtitles="+subs,
+        # Video and subtitles
+        "-vf", vs,
 
-        out
-        ]
+        "-f", "mp4", # Force format, as /dev/null has no ext.
+        "-y",        # Allow "re-write" /dev/null w/o questions.
+    ]
+
     if cfg["overwrite"]:
-        ffmpeg_command.append("-y")
+        ffmpeg_cmd_common_opts.append("-y")
+
     if cfg["size_target"]:
         print("Will do two pass converion as bitrate was specified")
-        ffmpeg_command_1 = [
-            "ffmpeg",
-            "-i", video,
-
-            # Video setting
-            "-c:v", "libx264",
+        ffmpeg_cmd_1 = ffmpeg_cmd_common_opts + [
+            # Video bitrate
             "-b:v", str(cfg["size_target"])+"k",
             "-pass", "1",
-            "-map", v_stream,
-
-            # Audio setting
-            "-acodec", "aac",
-            "-map", astream,
-            # TODO: extract into param. These key turns sound into stereo
-            # from, say 5.1. Nothing but mono/stereo can be played on iPhone
-            "-ac", "2",
-
-            # Subs setting
-            "-vf", "subtitles="+subs,
-
-            "-f", "mp4", # Force format, as /dev/null has no ext.
-            "-y",        # Allow "re-write" /dev/null w/o questions.
             "/dev/null"]
 
-        ffmpeg_command_2 = [
-            "ffmpeg",
-            "-i", video,
-
-            # Video setting
-            "-c:v", "libx264",
+        ffmpeg_cmd_2 = [
+            # Video bitrate
             "-b:v", str(cfg["size_target"])+"k",
             "-pass", "2",
-            "-map", v_stream,
-
-            # Audio setting
-            "-acodec", "aac",
-            "-map", astream,
-            # TODO: extract into param. These key turns sound into stereo
-            # from, say 5.1. Nothing but mono/stereo can be played on iPhone
-            "-ac", "2",
-
-            # Subs setting
-            "-vf", "subtitles="+subs,
-
             out
         ]
-        print(ffmpeg_command_1)
-        res = subprocess.run(ffmpeg_command_1, capture_output=False)
+        print(ffmpeg_cmd_1)
+        res = subprocess.run(ffmpeg_cmd_1, capture_output=False)
         print(res)
         if res.returncode == 0:
             print ("OK: FFmpeg pass 1 finished")
@@ -391,8 +380,8 @@ def convert_one(cfg, e):
             print ("ERR: FFmpeg pass 1 failed")
             return False
 
-        print(ffmpeg_command_2)
-        res = subprocess.run(ffmpeg_command_2, capture_output=False)
+        print(ffmpeg_cmd_2)
+        res = subprocess.run(ffmpeg_cmd_2, capture_output=False)
         print(res)
         if res.returncode == 0:
             print ("OK: FFmpeg pass 2 finished")
@@ -401,8 +390,13 @@ def convert_one(cfg, e):
             print ("ERR: FFmpeg pass 2 failed")
             return False
     else:
-        print(ffmpeg_command)
-        if subprocess.run(ffmpeg_command).returncode == 0:
+        ffmpeg_cmd = ffmpeg_cmd_common_opts + [
+            "-preset", "slower",
+            "-crf", str(cfg["quality"]),
+            out
+        ]
+        print(ffmpeg_cmd)
+        if subprocess.run(ffmpeg_cmd).returncode == 0:
             print ("OK: FFmpeg finished")
             return True
         else:
