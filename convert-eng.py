@@ -8,6 +8,14 @@ from os.path import basename, getsize, join, splitext
 import re
 import subprocess
 
+def parse_resolution(resolution):
+    try:
+        width, height = map(int, resolution.split('x'))
+        return width, height
+    except ValueError:
+        raise argparse.ArgumentTypeError("Resolution must be in the format "\
+                                         "WIDTHxHEIGHT (e.g., 1280x1024)")
+
 def parse_args():
     cfg = {
         "audio_enforce": 0,
@@ -17,6 +25,7 @@ def parse_args():
         "overwrite": False,
         "verbose": False,
         "settings_video": None,
+        "video_fit": None,
         "settings_subtitles": None,
         "test_mode": False,
         "a_stream": None,
@@ -70,6 +79,11 @@ def parse_args():
                         help="Be verbose (TODO: make it integer).",
                         action="store_true")
 
+    parser.add_argument("-vf", "--video_fit",
+                        help="Fit video stream to given resolution by using" \
+                        "scale and crop filters",
+                        type=parse_resolution)
+
     parser.add_argument("-y", "--yes",
                         help="Overwrite output file if exists.",
                         action="store_true")
@@ -88,6 +102,13 @@ def parse_args():
     cfg["overwrite"] = args.yes
     if args.quality is not None: cfg["quality"] = args.quality
     if args.size_target is not None: cfg["size_target"] = args.size_target
+
+    if args.video_fit is not None:
+        cfg["video_fit"] = args.video_fit # w, h
+        if args.settings_video is not None:
+            print("WRN: --settings_video switch should not contain crop or " \
+                  "scale filters. This is for subtitles mostly until it is " \
+                  "extracted into separate option.")
 
     return cfg
 
@@ -159,34 +180,48 @@ def analyze_episodes(cfg, v_list, s_list):
 
     return e_list
 
+# Arg cmd is a _list_ of options to pass to ffprobe
+def exec_ffprobe_json(cfg, video, cmd):
+    ffprobe_cmd=["ffprobe",
+                 "-i", video,
+                 "-of", "json",
+                 "-v", "panic",
+                 "-show_entries"]
+    ffprobe_cmd += cmd
+    if cfg["verbose"]: print(ffprobe_cmd)
+    res = subprocess.run(ffprobe_cmd, capture_output=True)
+    if cfg["verbose"]: print(res)
+    if res.returncode != 0:
+        print("ERR: error during ffprobe execution. Unable find video track")
+        return
+
+    return res
+
+# Arg cmd is a string with filter.
+def jq_extract_value(cfg, input, cmd):
+    jq_filter_cmd=["jq", cmd, "-"]
+    if cfg["verbose"]: print("DBG:", jq_filter_cmd)
+    res = subprocess.run(jq_filter_cmd, input=input, capture_output=True)
+    if cfg["verbose"]: print("DBG:", res)
+    if res.returncode != 0:
+        print("ERR: error during execution of jq. Command was",
+              jq_filter_cmd)
+        return
+    res = res.stdout.decode("utf-8").rstrip()
+    return res
+
 # Search a video file for English subtitles.
 # Return result as a correct argument for ffmpeg convertor
 def scan_eng_subtitles(cfg, video):
-    ff_probe_command=["ffprobe",
-                       "-i", video,
-                       "-show_entries", "stream=index,codec_type:stream_tags=language",
-                       "-of", "json",
-                       "-v", "panic",
-                       "-select_streams", "s"]
-    if cfg["verbose"]: print(ff_probe_command)
-    res = subprocess.run(ff_probe_command, capture_output=True)
-    if cfg["verbose"]: print(res)
-    if res.returncode != 0:
-        print("ERR: error during ffprobe execution. Unable to fetch subtitles")
-        return
+    cmd = ["stream=index,codec_type:stream_tags=language",
+           "-select_streams", "s"]
+    res = exec_ffprobe_json(cfg, video, cmd)
 
-    jq_filter_command=["jq",
-                       "[.streams[].tags.language==\"eng\"]|index(true)",
-                       "-"]
-    if cfg["verbose"]: print("DBG:", jq_filter_command)
-    res = subprocess.run(jq_filter_command, input=res.stdout, capture_output=True)
-    if cfg["verbose"]: print("DBG:", res)
-    if res.returncode != 0:
-        print("ERR: error during execution of jq. Unable to fetch subtitles")
-        return
+    res = jq_extract_value(cfg, res.stdout,
+                           "[.streams[].tags.language==\"eng\"]|index(true)")
 
     # Strip newline from result
-    res = video + ":si=" + res.stdout.decode("utf-8").rstrip()
+    res = video + ":si=" + res
     print("INF: OK: found subtitles track inside video file", res)
     return res
 
@@ -195,31 +230,13 @@ def scan_eng_subtitles(cfg, video):
 # All other "commentary" and alike are later.
 # Return result as a correct argument for ffmpeg convertor
 def scan_eng_astream(cfg, video):
-    ff_probe_command=["ffprobe",
-                       "-i", video,
-                       "-show_entries", "stream=index,codec_type:stream_tags=language",
-                       "-of", "json",
-                       "-v", "panic",
-                       "-select_streams", "a"]
-    if cfg["verbose"]: print(ff_probe_command)
-    res = subprocess.run(ff_probe_command, capture_output=True)
-    if cfg["verbose"]: print(res)
-    if res.returncode != 0:
-        print("ERR: error during ffprobe execution. Unable to fetch English audio track")
-        return
+    cmd = ["stream=index,codec_type:stream_tags=language",
+           "-select_streams", "a"]
+    res = exec_ffprobe_json(cfg, video, cmd)
 
-    jq_filter_command=["jq",
-                       "[.streams[] | select(.tags.language==\"eng\").index][0]",
-                       "-"]
-    if cfg["verbose"]: print(jq_filter_command)
-    res = subprocess.run(jq_filter_command, input=res.stdout, capture_output=True)
-    if cfg["verbose"]: print(res)
-    if res.returncode != 0:
-        print("ERR: error during execution of jq. Unable to fetch English audio track")
-        return
+    res = jq_extract_value(cfg, res.stdout,
+                           "[.streams[] | select(.tags.language==\"eng\").index][0]")
 
-    # Strip newline from result
-    res = res.stdout.decode("utf-8").rstrip()
     if res == "null":
         print("ERR: cannot find English audio track.")
         if cfg["audio_enforce"] == 0:
@@ -233,38 +250,28 @@ def scan_eng_astream(cfg, video):
     return res
 
 def scan_vstream(cfg, video):
-    ff_probe_command=["ffprobe",
-                       "-i", video,
-                       "-show_entries", "stream=index",
-                       "-of", "json",
-                       "-v", "panic",
-                       "-select_streams", "v"]
-    if cfg["verbose"]: print(ff_probe_command)
-    res = subprocess.run(ff_probe_command, capture_output=True)
-    if cfg["verbose"]: print(res)
-    if res.returncode != 0:
-        print("ERR: error during ffprobe execution. Unable find video track")
-        return
+    # 1. Search for video stream
+    cmd = ["stream=index", "-select_streams", "v"]
+    res = exec_ffprobe_json(cfg, video, cmd)
 
-    jq_filter_command=["jq",
-                       "[.streams[].index][0]",
-                       "-"]
-    if cfg["verbose"]: print(jq_filter_command)
-    res = subprocess.run(jq_filter_command, input=res.stdout, capture_output=True)
-    if cfg["verbose"]: print(res)
-    if res.returncode != 0:
-        print("ERR: error during execution of jq. Unable to find video track")
-        return
-
-    # Strip newline from result
-    res = res.stdout.decode("utf-8").rstrip()
-    if res == "null":
+    track = jq_extract_value(cfg, res.stdout,
+                             "[.streams[].index][0]")
+    if track == "null":
         print("ERR: cannot find video stream.")
         return
 
-    res = "0:" + res
-    print("INFO: OK: found video track inside video file", res)
-    return res
+    # 2. Detect original resolution
+    cmd = ["stream=width,height", "-select_streams", "v:"+track]
+    res = exec_ffprobe_json(cfg, video, cmd)
+
+    w = jq_extract_value(cfg, res.stdout,
+                         "[.streams[].width][0]")
+    h = jq_extract_value(cfg, res.stdout,
+                         "[.streams[].height][0]")
+
+    res = "0:" + track
+    print("INFO: OK: found video track", res, "Resolution", w+"x"+h)
+    return res, int(w), int(h)
 
 # Fixup filenames in a root dir. The function uses config's root dir
 # and walks (top down) through directories and file recursively.
@@ -320,12 +327,29 @@ def convert_one(cfg, e):
         print("ERR: no audio stream defined or guessed.")
         return False
 
-    v_stream = scan_vstream(cfg, video)
+    v_stream, orig_w, orig_h = scan_vstream(cfg, video)
 
-    if cfg["settings_video"]:
-        vs = cfg["settings_video"]+","
+    vs = ""
+    if cfg["video_fit"] is not None:
+        assert(cfg["settings_video"] is None)
+        assert(orig_w > orig_h)
+        fit_w = cfg["video_fit"][0]
+        fit_h = cfg["video_fit"][1]
+        assert(fit_w > fit_h)
+
+        d = fit_w / fit_h
+        # Crop
+        crop_h = orig_w / d
+        crop_h = int(round(crop_h) + (round(crop_h) % 2)) # Even int for codec
+        shift_y = (orig_h - crop_h) / 2
+        crop = "crop=w="+str(orig_w)+":h="+str(crop_h)+":x=0"+":y="+str(shift_y)
+        # Scale
+        scale = "scale=w="+str(fit_w)+":h="+str(fit_h)
+        vs = crop+","+scale+","
+        print("INFO: video track conversion command is", vs)
     else:
-        vs = ""
+        if cfg["settings_video"]:
+            vs = cfg["settings_video"]+","
 
     vs += "subtitles=" + subs
     if cfg["settings_subtitles"]:
@@ -365,7 +389,7 @@ def convert_one(cfg, e):
             "-pass", "1",
             "/dev/null"]
 
-        ffmpeg_cmd_2 = [
+        ffmpeg_cmd_2 = ffmpeg_cmd_common_opts + [
             # Video bitrate
             "-b:v", str(cfg["size_target"])+"k",
             "-pass", "2",
