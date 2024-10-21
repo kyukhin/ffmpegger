@@ -21,20 +21,15 @@ ROOT_DIR=$1
 SAVEIFS=$IFS
 IFS=$(echo -en "\n\b")
 
-if [ -d "${ROOT_DIR}" ]
-then
-    # If this is a root dir which contains multiple seasons -- will handle
-    # handle them 1 by 1 in order not to exhaust remote disk.
-    # BUGBUG: what if root dir is a dir which contains movie and meta (subs) in
-    # separate files? will they be copied/handled 1 by 1 leading to wrong
-    # results?
-    L="${ROOT_DIR}/*"
+if [ -f ${ROOT_DIR} ]; then
+    L="${ROOT_DIR}";
 else
-    # Need to be able to handle a stand-alone movie.
-    L="${ROOT_DIR}"
+    if [ -d ${ROOT_DIR} ]; then
+	L=${ROOT_DIR}/*
+    fi
 fi
 
-for f in "${L}" ; do
+for f in "${L}"; do
     echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
     rsync -e "ssh -i ${VM_KEY}" --progress -av "${f}" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}
     if [ $? -ne 0 ]; then
