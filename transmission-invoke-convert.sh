@@ -2,7 +2,11 @@
 
 LOG="${HOME}/logs/transmission-invoke-convert.log"
 
-echo "Invoked new convert" >> $LOG
+VBITRATE="--size_target=1600"
+S_SETTINGS="--settings_subtitles=\"force_style='Fontsize=40'\""
+V_SETTINGS="--video_fit=1920x700"
+
+echo "Invoked new convert" > $LOG
 echo -n "On " >> $LOG
 date >> $LOG
 
@@ -21,12 +25,19 @@ echo "VM command: $VM_COMMAND" >> $LOG
 echo "VM dir in: $VM_DIR_IN" >> $LOG
 echo "VM dir out: $VM_DIR_OUT" >> $LOG
 
-if [[ ${RPATH} == *"0unsort/0convert"* ]]; then
-    echo "Will do conversion." >> $LOG
-    source ${HOME}/convert-remote.sh "${RPATH}" >> $LOG 2>&1
-else
-    echo "Will skip conversion." >> $LOG
-fi
+case "${RPATH}" in
+    *"0unsort/0convert"*)
+        echo "Will do web-oriented conversion." >> $LOG
+        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" >> $LOG 2>&1
+        ;;
+    *"0unsort/1convert-bmw"*)
+        echo "Will do car-oriented conversion." >> $LOG
+        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" $V_SETTINGS $S_SETTINGS >> $LOG 2>&1
+        ;;
+    *)
+        echo "Will skip conversion." >> $LOG
+        ;;
+esac
 
 date >> $LOG
 echo "Done." >> $LOG
