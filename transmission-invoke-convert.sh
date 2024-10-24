@@ -1,6 +1,11 @@
 #!/bin/bash
 
-LOG="${HOME}/logs/transmission-invoke-convert.log"
+if [ -n ${CONVERT_LOG} ]
+then
+    LOG=${CONVERT_LOG}
+else
+    LOG="${HOME}/logs/transmission-invoke-convert.log"
+fi
 
 VBITRATE="--size_target=1600"
 S_SETTINGS="--settings_subtitles=\"force_style='Fontsize=40'\""
