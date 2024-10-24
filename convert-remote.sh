@@ -18,18 +18,17 @@ fi
 
 ROOT_DIR=$1
 
-SAVEIFS=$IFS
-IFS=$(echo -en "\n\b")
-
 if [ -f ${ROOT_DIR} ]; then
-    L="${ROOT_DIR}";
+    L=("${ROOT_DIR}")
 else
     if [ -d ${ROOT_DIR} ]; then
-	L=${ROOT_DIR}/*
+	for f in "$ROOT_DIR"/*; do
+	    L+=("${f}")
+	done
     fi
 fi
 
-for f in "${L}"; do
+for f in "${L[@]}"; do
     echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
     rsync -e "ssh -i ${VM_KEY}" --progress -av "${f}" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}
     if [ $? -ne 0 ]; then
@@ -64,4 +63,4 @@ for f in "${L}"; do
 	exit 1
     fi
 done
-IFS=$SAVEIFS
+#IFS=$SAVEIFS
