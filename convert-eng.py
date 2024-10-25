@@ -261,7 +261,10 @@ def scan_vstream(cfg, video):
         return
 
     # 2. Detect original resolution
-    cmd = ["stream=width,height", "-select_streams", "v:"+track]
+    # NB: do not specify stream type as it will make indexing local.
+    # E.g. if video stream indices were 0 and 7 passing prefix "v:7"
+    # will led to error, as for "v:" only 0 and 1 will be valid.
+    cmd = ["stream=width,height", "-select_streams", track]
     res = exec_ffprobe_json(cfg, video, cmd)
 
     w = jq_extract_value(cfg, res.stdout,
