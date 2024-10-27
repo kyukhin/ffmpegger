@@ -10,23 +10,28 @@ ARGS="${@:2}"
 echo "Args are: ${ARGS}"
 
 echo "ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
-ssh -v -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
+ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
 if [ $? -ne 0 ]; then
     echo "ERR: cleanup remote dirs. Exit."
     exit 1
 fi
 
-ROOT_DIR=$1
+ROOT_DIR="${1}"
 
-if [ -f ${ROOT_DIR} ]; then
+if [ -f "${ROOT_DIR}" ]; then
     L=("${ROOT_DIR}")
 else
-    if [ -d ${ROOT_DIR} ]; then
+    if [ -d "${ROOT_DIR}" ]; then
 	for f in "$ROOT_DIR"/*; do
 	    L+=("${f}")
 	done
     fi
 fi
+
+echo "Top dir listing"
+for f in "${L[@]}"; do
+    echo "${f}"
+done
 
 for f in "${L[@]}"; do
     echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
@@ -45,8 +50,8 @@ for f in "${L[@]}"; do
     fi
 
     OUT=${f}
-    if [ -f $OUT ] ; then
-	OUT=`dirname ${OUT}`
+    if [ -f "${OUT}" ] ; then
+	OUT=`dirname "$(realpath ${OUT})"`
     fi
 
     echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} \"${OUT}\""
@@ -63,4 +68,3 @@ for f in "${L[@]}"; do
 	exit 1
     fi
 done
-#IFS=$SAVEIFS

@@ -1,10 +1,9 @@
 #!/bin/bash
 
-if [ -n ${CONVERT_LOG} ]
-then
-    LOG=${CONVERT_LOG}
-else
+if [ -z ${CONVERT_LOG} ]; then
     LOG="${HOME}/logs/transmission-invoke-convert.log"
+else
+    LOG=${CONVERT_LOG}
 fi
 
 VBITRATE="--size_target=1600"
@@ -37,7 +36,7 @@ case "${RPATH}" in
         ;;
     *"0unsort/1convert-bmw"*)
         echo "Will do car-oriented conversion." >> $LOG
-        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" $V_SETTINGS $S_SETTINGS >> $LOG 2>&1
+        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" $V_SETTINGS $S_SETTINGS >>$LOG 2>&1
         ;;
     *)
         echo "Will skip conversion." >> $LOG
