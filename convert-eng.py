@@ -27,6 +27,7 @@ def parse_args():
         "settings_video": None,
         "video_fit": None,
         "settings_subtitles": None,
+        "subtitles_disabled": None,
         "test_mode": False,
         "a_stream": None,
         "quality": 16,
@@ -75,6 +76,10 @@ def parse_args():
                         help="Subtitles settings to pass to libass, for example",
                         type=str)
 
+    parser.add_argument("-sd", "--subtitles_disabled",
+                        help="Do not burn in subtitles.",
+                        action="store_true")
+
     parser.add_argument("-v", "--verbose",
                         help="Be verbose (TODO: make it integer).",
                         action="store_true")
@@ -100,6 +105,7 @@ def parse_args():
     if args.settings_subtitles: cfg["settings_subtitles"] = args.settings_subtitles
     cfg["test_mode"] = args.test
     cfg["overwrite"] = args.yes
+    cfg["subtitles_disabled"] = args.subtitles_disabled
     if args.quality is not None: cfg["quality"] = args.quality
     if args.size_target is not None: cfg["size_target"] = args.size_target
 
@@ -318,10 +324,11 @@ def convert_one(cfg, e):
     astream = cfg["a_stream"]
     out = splitext(join(cfg["out_dir"], basename(video)))[0] + ".mp4"
 
-    if not e[3]:
-        subs = scan_eng_subtitles(cfg, video)
-    else:
-        subs = e[3]
+    if not cfg["subtitles_disabled"]:
+        if not e[3]:
+            subs = scan_eng_subtitles(cfg, video)
+        else:
+            subs = e[3]
 
     if not astream:
         astream = scan_eng_astream(cfg, video)
@@ -354,10 +361,6 @@ def convert_one(cfg, e):
         if cfg["settings_video"]:
             vs = cfg["settings_video"]+","
 
-    vs += "subtitles=" + subs
-    if cfg["settings_subtitles"]:
-        vs += ":" + cfg["settings_subtitles"]
-
     if cfg["verbose"]: print("DBG: video filter setting:", vs)
 
     ffmpeg_cmd_common_opts = [
@@ -374,12 +377,18 @@ def convert_one(cfg, e):
         # from, say 5.1. Nothing but mono/stereo can be played on iPhone
         "-ac", "2",
 
-        # Video and subtitles
-        "-vf", vs,
-
         "-f", "mp4", # Force format, as /dev/null has no ext.
         "-y",        # Allow "re-write" /dev/null w/o questions.
     ]
+
+    # Subtitles
+    if not cfg["subtitles_disabled"]:
+        vs += "subtitles=" + subs
+        if cfg["settings_subtitles"]:
+            vs += ":" + cfg["settings_subtitles"]
+
+    if vs != "":
+        ffmpeg_cmd_common_opts += ["-vf", vs]
 
     if cfg["overwrite"]:
         ffmpeg_cmd_common_opts.append("-y")
@@ -399,22 +408,20 @@ def convert_one(cfg, e):
             out
         ]
         print(ffmpeg_cmd_1)
-        res = subprocess.run(ffmpeg_cmd_1, capture_output=False)
-        print(res)
+        res = subprocess.run(ffmpeg_cmd_1, capture_output=True)
         if res.returncode == 0:
             print ("OK: FFmpeg pass 1 finished")
         else:
-            print ("ERR: FFmpeg pass 1 failed")
+            print ("ERR: FFmpeg pass 1 failed", res.args, res.stdout, res.stderr)
             return False
 
         print(ffmpeg_cmd_2)
-        res = subprocess.run(ffmpeg_cmd_2, capture_output=False)
-        print(res)
+        res = subprocess.run(ffmpeg_cmd_2, capture_output=True)
         if res.returncode == 0:
             print ("OK: FFmpeg pass 2 finished")
             return True
         else:
-            print ("ERR: FFmpeg pass 2 failed")
+            print ("ERR: FFmpeg pass 2 failed", res.args, res.stdout, res.stderr)
             return False
     else:
         ffmpeg_cmd = ffmpeg_cmd_common_opts + [

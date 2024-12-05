@@ -34,8 +34,8 @@ for f in "${L[@]}"; do
 done
 
 for f in "${L[@]}"; do
-    echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
-    rsync -e "ssh -i ${VM_KEY}" --progress -av "${f}" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}
+    echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av --copy-links \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
+    rsync -e "ssh -i ${VM_KEY}" --progress -av --copy-links "${f}" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}
     if [ $? -ne 0 ]; then
 	echo "ERR: syncing to VM. Exit."
 	exit 1
@@ -51,7 +51,7 @@ for f in "${L[@]}"; do
 
     OUT=${f}
     if [ -f "${OUT}" ] ; then
-	OUT=`dirname "$(realpath ${OUT})"`
+	OUT=`dirname "$(realpath "${OUT}")"`
     fi
 
     echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} \"${OUT}\""
