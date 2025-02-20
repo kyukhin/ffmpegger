@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ -z ${CONVERT_LOG} ]; then
-    LOG="${HOME}/logs/transmission-invoke-convert.log"
+    LOG="${HOME}/logs/transmission-invoke-convert-$(date +"%y.%m.%d-%H:%M:%S").log"
 else
     LOG=${CONVERT_LOG}
 fi
