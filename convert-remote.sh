@@ -9,8 +9,8 @@ ARGS="${@:2}"
 
 echo "Args are: ${ARGS}"
 
-echo "ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
-ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
+echo "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
+ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
 if [ $? -ne 0 ]; then
     echo "ERR: cleanup remote dirs. Exit."
     exit 1
@@ -34,15 +34,15 @@ for f in "${L[@]}"; do
 done
 
 for f in "${L[@]}"; do
-    echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av --copy-links \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
-    rsync -e "ssh -i ${VM_KEY}" --progress -av --copy-links "${f}" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}
+    echo "rsync -e \"ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}\" --progress -av --copy-links \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
+    rsync -e "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}" --progress -av --copy-links "${f}" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}
     if [ $? -ne 0 ]; then
 	echo "ERR: syncing to VM. Exit."
 	exit 1
     fi
 
-    echo "ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}\""
-    ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} "${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}"
+    echo "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}\""
+    ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} "${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}"
     if [ $? -ne 0 ]; then
 	echo "ERR: performing conversion. Exit."
 	# TODO: cleanup remote
@@ -54,15 +54,15 @@ for f in "${L[@]}"; do
 	OUT=`dirname "$(realpath "${OUT}")"`
     fi
 
-    echo "rsync -e \"ssh -i ${VM_KEY}\" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} \"${OUT}\""
-    rsync -e "ssh -i ${VM_KEY}" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} "${OUT}"
+    echo "rsync -e \"ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}\" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} \"${OUT}\""
+    rsync -e "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} "${OUT}"
     if [ $? -ne 0 ]; then
 	echo "ERR: syncing from VM. Exit."
 	exit 1
     fi
 
-    echo "ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
-    ssh -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
+    echo "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
+    ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
     if [ $? -ne 0 ]; then
 	echo "ERR: cleanup remote dirs. Exit."
 	exit 1

@@ -34,12 +34,18 @@ echo "Path is: ${RPATH}" >> $LOG
 
 source ${HOME}/env
 
+if [ -z "${VM_PORT}" ]; then
+    VM_PORT="22"
+fi
+
 echo "VM host: $VM_HOST" >> $LOG
+echo "VM port: $VM_PORT" >> $LOG
 echo "VM user: $VM_USER" >> $LOG
 echo "VM key: $VM_KEY" >> $LOG
 echo "VM command: $VM_COMMAND" >> $LOG
 echo "VM dir in: $VM_DIR_IN" >> $LOG
 echo "VM dir out: $VM_DIR_OUT" >> $LOG
+echo "VM port: $VM_PORT" >> $LOG
 
 case "${RPATH}" in
     *"0unsort/0convert"*)
