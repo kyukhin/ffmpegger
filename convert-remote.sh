@@ -7,12 +7,36 @@ echo "Handling $1..."
 
 ARGS="${@:2}"
 
+LOCK=".lock"
+LOCK_FILE_PATH="${VM_DIR_IN}/${LOCK}"
+
+SSH_CMD="ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}"
+SSH_HOST="${VM_USER}@${VM_HOST}"
+
 echo "Args are: ${ARGS}"
 
-echo "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
-ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
+if `${SSH_CMD} ${SSH_HOST} "ls -a ${VM_DIR_IN}/ 2>/dev/null | grep -q ${LOCK}"`; then
+    count=0
+    while `${SSH_CMD} ${SSH_HOST} "ls -a ${VM_DIR_IN}.${count}/ 2>/dev/null | grep -q ${LOCK}"`; do
+        ((count++))
+    done
+    VM_DIR_IN="${VM_DIR_IN}.${count}"
+    VM_DIR_OUT="${VM_DIR_OUT}.${count}"
+    LOCK_FILE_PATH="${VM_DIR_IN}/${LOCK}"
+    ${SSH_CMD} ${SSH_HOST} "mkdir -p \"$VM_DIR_IN\""
+    ${SSH_CMD} ${SSH_HOST} "mkdir -p \"$VM_DIR_OUT\""
+fi
+
+echo "Working directories are: IN=${VM_DIR_IN} OUT=${VM_DIR_OUT}"
+${SSH_CMD} ${SSH_HOST} "echo > ${LOCK_FILE_PATH}"
+echo "Locked."
+
+echo "${SSH_CMD} ${SSH_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
+${SSH_CMD} ${SSH_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
 if [ $? -ne 0 ]; then
     echo "ERR: cleanup remote dirs. Exit."
+    ${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+    echo "Unlocked."
     exit 1
 fi
 
@@ -34,18 +58,22 @@ for f in "${L[@]}"; do
 done
 
 for f in "${L[@]}"; do
-    echo "rsync -e \"ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}\" --progress -av --copy-links \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
-    rsync -e "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}" --progress -av --copy-links "${f}" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}
+    echo "rsync -e \"${SSH_CMD}\" --info=name -a --copy-links \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
+    rsync -e "${SSH_CMD}" --info=name -a --copy-links "${f}" ${SSH_HOST}:${VM_DIR_IN}
     if [ $? -ne 0 ]; then
 	echo "ERR: syncing to VM. Exit."
+	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+	echo "Unlocked."
 	exit 1
     fi
 
-    echo "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}\""
-    ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} "${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}"
+    echo "${SSH_CMD} ${SSH_HOST} \"${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}\""
+    ${SSH_CMD} ${SSH_HOST} "${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}"
     if [ $? -ne 0 ]; then
 	echo "ERR: performing conversion. Exit."
 	# TODO: cleanup remote
+	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+	echo "Unlocked."
 	exit 1
     fi
 
@@ -54,17 +82,24 @@ for f in "${L[@]}"; do
 	OUT=`dirname "$(realpath "${OUT}")"`
     fi
 
-    echo "rsync -e \"ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}\" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} \"${OUT}\""
-    rsync -e "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY}" --progress -av ${VM_USER}@${VM_HOST}:${VM_DIR_OUT} "${OUT}"
+    echo "rsync -e \"${SSH_CMD}\" --info=name -a ${SSH_HOST}:${VM_DIR_OUT} \"${OUT}\""
+    rsync -e "${SSH_CMD}" --info=name -a ${SSH_HOST}:${VM_DIR_OUT} "${OUT}"
     if [ $? -ne 0 ]; then
 	echo "ERR: syncing from VM. Exit."
+	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+	echo "Unlocked."
 	exit 1
     fi
 
-    echo "ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
-    ssh -oStrictHostKeyChecking=accept-new -p ${VM_PORT} -i ${VM_KEY} ${VM_USER}@${VM_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
+    echo "${SSH_CMD} ${SSH_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
+    ${SSH_CMD} ${SSH_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
     if [ $? -ne 0 ]; then
 	echo "ERR: cleanup remote dirs. Exit."
+	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+	echo "Unlocked."
 	exit 1
     fi
 done
+
+${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+echo "Unlocked."
