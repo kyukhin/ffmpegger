@@ -8,7 +8,7 @@ fi
 
 VBITRATE="--size_target=1600"
 S_SETTINGS="--settings_subtitles=\"force_style='Fontsize=40'\""
-V_SETTINGS="--video_fit=1920x700"
+BMW_V_SETTINGS="--video_fit=1920x700"
 
 # FIXME: learn the script to discover Russian track on its own.
 IPAD_A_RUS_SETTINGS="--subtitles_disabled --astream=0:0"
@@ -48,13 +48,13 @@ echo "VM dir out: $VM_DIR_OUT" >> $LOG
 echo "VM port: $VM_PORT" >> $LOG
 
 case "${RPATH}" in
-    *"0unsort/0convert"*)
+    *"0unsort/0web"*)
         echo "Will do web-oriented conversion." >> $LOG
-        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" >> $LOG 2>&1
+        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" "${S_SETTINGS}" >> $LOG 2>&1
         ;;
-    *"0unsort/1convert-bmw"*)
+    *"0unsort/0bmw"*)
         echo "Will do car-oriented conversion." >> $LOG
-        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" $V_SETTINGS $S_SETTINGS >>$LOG 2>&1
+        source ${HOME}/convert-remote.sh "${RPATH}" "${VBITRATE}" ${BMW_V_SETTINGS} ${S_SETTINGS} >>$LOG 2>&1
         ;;
     *"0unsort/0ipad-rus"*)
         echo "Will do ipad-oriented conversion. No titles. Russian audio." >> $LOG
