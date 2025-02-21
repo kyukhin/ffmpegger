@@ -1,19 +1,17 @@
 #!/bin/bash
 
-if [ -z "$1" ]; then
-    echo "Usage: $0 <directory>"
-    exit 1
-fi
-
 DIR="$1"
+if [ -z "${DIR}" ]; then
+    DIR=${PWD}
+fi
 
 find "$DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.avi" \) |while read -r file; do
     dir=$(dirname "$file")
     base=$(basename "$file")
 
     temp_name="$base"
-    if [[ "$temp_name" =~ ^(.+?)[._-]?WEB[-_.]?DL.*\.([a-zA-Z0-9]+)$ ]]; then
-        temp_name="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+    if [[ "$temp_name" =~ ^(.+?)[._-]?(WEB|BD)[-_.]?(DL|Rip).*\.([a-zA-Z0-9]+)$ ]]; then
+        temp_name="${BASH_REMATCH[1]}.${BASH_REMATCH[4]}"
     fi
 
     if [[ "$temp_name" =~ ^(.+?)[._-]?(720|1080)[pP].*\.([a-zA-Z0-9]+)$ ]]; then
