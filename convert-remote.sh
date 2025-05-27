@@ -83,7 +83,7 @@ for f in "${L[@]}"; do
     fi
 
     echo "rsync -e \"${SSH_CMD}\" --info=name -a ${SSH_HOST}:${VM_DIR_OUT} \"${OUT}\""
-    rsync -e "${SSH_CMD}" --info=name -a ${SSH_HOST}:${VM_DIR_OUT} "${OUT}"
+    rsync -e "${SSH_CMD}" -O --info=name -a ${SSH_HOST}:${VM_DIR_OUT} "${OUT}"
     if [ $? -ne 0 ]; then
 	echo "ERR: syncing from VM. Exit."
 	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
