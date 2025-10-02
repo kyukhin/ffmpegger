@@ -18,7 +18,7 @@ def parse_resolution(resolution):
 
 def parse_args():
     cfg = {
-        "audio_enforce": 0,
+        "audio_enforce": -1,
         "fixup_names": False,
         "root_dir": os.getcwd(),
         "out_dir": os.getcwd(),
@@ -244,8 +244,8 @@ def scan_eng_astream(cfg, video):
                            "[.streams[] | select(.tags.language==\"eng\").index][0]")
 
     if res == "null":
-        print("ERR: cannot find English audio track.")
-        if cfg["audio_enforce"] == 0:
+        print("WRN: cannot find English audio track.")
+        if cfg["audio_enforce"] == -1:
             return
         res = str(cfg["audio_enforce"])
         print("INF: enforcing track", res)
