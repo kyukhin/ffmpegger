@@ -136,7 +136,8 @@ def scan_videos(cfg):
 
             if fn.endswith(subs_exts):
                 if cfg["verbose"]: print("DBG: SUBS!", end=" ")
-                if "eng".casefold() in join(root, fn).casefold():
+                if "eng".casefold() in join(root, fn).casefold() or \
+                   ".en.".casefold() in join(root, fn).casefold():
                     if cfg["verbose"]: print("ENG!!!")
                     s_list.append(join(root, fn))
                 else:
@@ -466,6 +467,8 @@ def main():
         print("INFO: No external English subtitles detected.")
         print("INFO: Will still try to extract it from main video file.")
     else:
+        print("INFO: subtitles list length: ", len(s_list))
+        print("INFO: videos list length: ", len(v_list))
         assert len(s_list) == len(v_list)
 
     if len(v_list) == 1:
