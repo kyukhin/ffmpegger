@@ -226,6 +226,10 @@ def scan_eng_subtitles(cfg, video):
     res = jq_extract_value(cfg, res.stdout,
                            '[.streams[] | ((.tags.language // "") | test("eng"; "i")) or ((.tags.title // "") | test("eng"; "i"))] | index(true)')
 
+    if res == "null":
+        print("ERR: cannot find English subtitle track.")
+        return
+
     # Strip newline from result
     res = video + ":si=" + res
     print("INF: OK: found subtitles track inside video file", res)
@@ -329,6 +333,10 @@ def convert_one(cfg, e):
             subs = scan_eng_subtitles(cfg, video)
         else:
             subs = e[3]
+
+        if not subs:
+            print("ERR: no subtitle stream defined or guessed.")
+            return False
 
     if not astream:
         astream = scan_eng_astream(cfg, video)
