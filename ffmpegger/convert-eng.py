@@ -219,12 +219,12 @@ def jq_extract_value(cfg, input, cmd):
 # Search a video file for English subtitles.
 # Return result as a correct argument for ffmpeg convertor
 def scan_eng_subtitles(cfg, video):
-    cmd = ["stream=index,codec_type:stream_tags=language",
+    cmd = ["stream=index,codec_type:stream_tags=language,title",
            "-select_streams", "s"]
     res = exec_ffprobe_json(cfg, video, cmd)
 
     res = jq_extract_value(cfg, res.stdout,
-                           "[.streams[].tags.language==\"eng\"]|index(true)")
+                           '[.streams[] | ((.tags.language // "") | test("eng"; "i")) or ((.tags.title // "") | test("eng"; "i"))] | index(true)')
 
     # Strip newline from result
     res = video + ":si=" + res
