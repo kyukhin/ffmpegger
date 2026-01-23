@@ -10,21 +10,18 @@ find "$DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.avi" \) |wh
     base=$(basename "$file")
 
     temp_name="$base"
-    if [[ "$temp_name" =~ ^(.+?)[._-]?(WEB|BD)[-_.]?(DL|Rip|rip).*\.([a-zA-Z0-9]+)$ ]]; then
+    if [[ "$temp_name" =~ ^(.+?)[._-]?(WEB|BD|DVD|SAT|HDTV|DD5)[-_.]?(DL|Rip|rip).*\.([a-zA-Z0-9]+)$ ]]; then
         temp_name="${BASH_REMATCH[1]}.${BASH_REMATCH[4]}"
     fi
 
-    if [[ "$temp_name" =~ ^(.+?)[._-]?(720|1080)[pP].*\.([a-zA-Z0-9]+)$ ]]; then
+    if [[ "$temp_name" =~ ^(.+?)[._-]?(720|1080)[ipP].*\.([a-zA-Z0-9]+)$ ]]; then
         temp_name="${BASH_REMATCH[1]}.${BASH_REMATCH[3]}"
     fi
 
     # Random words
-    if [[ "$temp_name" =~ ^(.+?)[._-]?(dfcbit|Rus|Video).*\.([a-zA-Z0-9]+)$ ]]; then
+    if [[ "$temp_name" =~ ^([^[]+?)[-._[]*?(AMZN|REPACK|dfcbit|Eng|Ukr|Rus|Video|RGzsRutracker|KvK|CasStudio|DTS|BlueRay|Blu-ray|BluRay|x264|Goblin|Multreactor\.ru|filiza\.ru).*\.([a-zA-Z0-9]+)$ ]]; then
         temp_name="${BASH_REMATCH[1]}.${BASH_REMATCH[3]}"
     fi
-
-    # Remove spaces from filename
-    temp_name="${temp_name// /.}"
 
     clean_name=$(echo "$temp_name" | sed -E 's/[._-]+\.([a-zA-Z0-9]+)$/.\1/')
     new_path="$dir/$clean_name"
