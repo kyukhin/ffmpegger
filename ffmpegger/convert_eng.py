@@ -147,14 +147,14 @@ def scan_videos(cfg):
 
 def analyze_episodes(cfg, v_list, s_list):
     e_list = []
-    regex = re.compile(r"s(\d+)e(\d+)", flags=re.IGNORECASE)
+    regex = re.compile(r"s?(\d+)[ex](\d+)", flags=re.IGNORECASE)
     for v in v_list:
         if cfg["verbose"] : print("Analyzing", v)
         v_pair = regex.findall(v)
         season = None
         episode = None
         if not v_pair:
-            print("WRN: looks like filenames are not in sXXeYY format. External subtitles match won't work")
+            print("WRN: looks like filenames are not in sXXeYY or sXXxYY format. External subtitles match won't work")
         else:
             if len(v_pair[0]) != 2:
                 print("ERR: failed to extract Season/Episode from name. Exiting", v)
