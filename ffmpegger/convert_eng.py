@@ -28,6 +28,7 @@ def parse_args():
         "video_fit": None,
         "settings_subtitles": None,
         "subtitles_disabled": None,
+        "ignore_no_subtitles": False,
         "test_mode": False,
         "a_stream": None,
         "quality": 16,
@@ -80,6 +81,10 @@ def parse_args():
                         help="Do not burn in subtitles.",
                         action="store_true")
 
+    parser.add_argument("-ins", "--ignore_no_subtitles",
+                        help="Proceed without subtitles if English track not found.",
+                        action="store_true")
+
     parser.add_argument("-v", "--verbose",
                         help="Be verbose (TODO: make it integer).",
                         action="store_true")
@@ -106,6 +111,7 @@ def parse_args():
     cfg["test_mode"] = args.test
     cfg["overwrite"] = args.yes
     cfg["subtitles_disabled"] = args.subtitles_disabled
+    cfg["ignore_no_subtitles"] = args.ignore_no_subtitles
     if args.quality is not None: cfg["quality"] = args.quality
     if args.size_target is not None: cfg["size_target"] = args.size_target
 
@@ -248,13 +254,19 @@ def scan_eng_astream(cfg, video):
     res = jq_extract_value(cfg, res.stdout,
                            "[.streams[] | select(.tags.language==\"eng\").index][0]")
 
-    if res == "null":
-        print("WRN: cannot find English audio track.")
-        if cfg["audio_enforce"] == -1:
-            return
-        res = str(cfg["audio_enforce"])
-        print("INF: enforcing track", res)
-
+    if res == "null" or res is None:
+        print("WRN: cannot find English audio track by language tag.")
+        if cfg["audio_enforce"] != -1:
+            res = str(cfg["audio_enforce"])
+            print("INF: enforcing track", res)
+        else:
+            # Fall back to second audio stream (first is usually Russian)
+            res2 = exec_ffprobe_json(cfg, video, ["stream=index", "-select_streams", "a"])
+            res = jq_extract_value(cfg, res2.stdout, "[.streams[].index][1]")
+            if res == "null" or res is None:
+                print("ERR: no second audio stream found (need at least 2 audio streams for fallback).")
+                return
+            print("WRN: falling back to second audio stream (assuming first is Russian):", res)
 
     res = "0:" + res
     print("INFO: OK: found audio track inside video file", res)
@@ -329,15 +341,21 @@ def convert_one(cfg, e):
     astream = cfg["a_stream"]
     out = splitext(join(cfg["out_dir"], basename(video)))[0] + ".mp4"
 
-    if not cfg["subtitles_disabled"]:
+    subs = None
+    burn_subtitles = not cfg["subtitles_disabled"]
+    if burn_subtitles:
         if not e[3]:
             subs = scan_eng_subtitles(cfg, video)
         else:
             subs = e[3]
 
         if not subs:
-            print("ERR: no subtitle stream defined or guessed.")
-            return False
+            if cfg["ignore_no_subtitles"]:
+                print("WRN: no subtitle stream found, proceeding without subtitles.")
+                burn_subtitles = False
+            else:
+                print("ERR: no subtitle stream defined or guessed.")
+                return False
 
     if not astream:
         astream = scan_eng_astream(cfg, video)
@@ -391,7 +409,7 @@ def convert_one(cfg, e):
     ]
 
     # Subtitles
-    if not cfg["subtitles_disabled"]:
+    if burn_subtitles:
         vs += "subtitles=" + subs
         if cfg["settings_subtitles"]:
             vs += ":" + cfg["settings_subtitles"]
