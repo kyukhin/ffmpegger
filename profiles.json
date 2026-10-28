@@ -6,13 +6,13 @@
  "profiles": {
   "web": {
    "folder": "0unsort/0web",
-   "about": "English audio, English subtitles burnt in",
-   "args": ["--size_target=1600", "--settings_subtitles=force_style='Fontsize=40'"]
+   "about": "English audio, English subtitles burnt in, at most 1080p",
+   "args": ["--size_target=1600", "--max_height=1080", "--settings_subtitles=force_style='Fontsize=40'"]
   },
   "web-rus": {
    "folder": "0unsort/0web-rus",
-   "about": "Russian audio, no subtitles",
-   "args": ["--size_target=1600", "--subtitles_disabled", "--audio_lang=rus"]
+   "about": "Russian audio, no subtitles, at most 1080p",
+   "args": ["--size_target=1600", "--max_height=1080", "--subtitles_disabled", "--audio_lang=rus"]
   },
   "bmw": {
    "folder": "0unsort/0bmw",
@@ -21,8 +21,8 @@
   },
   "ipad-rus": {
    "folder": "0unsort/0ipad-rus",
-   "about": "Russian audio, no subtitles, small",
-   "args": ["--size_target=800", "--subtitles_disabled", "--audio_lang=rus"]
+   "about": "Russian audio, no subtitles, small, at most 720p",
+   "args": ["--size_target=800", "--max_height=720", "--subtitles_disabled", "--audio_lang=rus"]
   }
  }
 }

@@ -251,6 +251,28 @@ def test_single_pass_and_video_fit(tmp_path):
     assert probe.stdout.strip() == "160,60"
 
 
+def test_max_height():
+    assert ce.video_filters(cfg(max_height=1080), 3840, 2160) == ["scale=w=-2:h=1080"]
+    assert ce.video_filters(cfg(max_height=1080), 1920, 800) == []
+    assert ce.video_filters(cfg(max_height=1080, video_fit=(1920, 700)), 3840, 2160)[-1] == "scale=w=1920:h=700"
+
+
+@needs_ffmpeg
+def test_ten_bit_source_scaled_down_to_eight_bits(tmp_path):
+    """A 4K WEB-DL is HEVC Main 10: the result must be 8-bit H.264 that plays anywhere, at --max_height."""
+    src = str(tmp_path / "m.mkv")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=5",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=8000", "-t", "1",
+                    "-metadata:s:a:0", "language=eng", "-c:v", "libx264", "-pix_fmt", "yuv420p10le", "-preset", "ultrafast", "-c:a", "aac", src],
+                   check=True)
+    out = str(tmp_path / "0out")
+    assert ce.main(["-d", src, "-o", out, "-s", "50", "-sd", "-mh", "90"]) == 0
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
+                            "stream=width,height,pix_fmt", "-of", "csv=p=0", os.path.join(out, "m.mp4")],
+                           capture_output=True, text=True, check=True)
+    assert probe.stdout.strip() == "160,90,yuv420p"
+
+
 @needs_ffmpeg
 def test_cyrillic_names_with_a_windows_console_encoding(tmp_path):
     """Under the worker on Windows the output goes to a file in cp1252: names in Cyrillic must not kill it."""

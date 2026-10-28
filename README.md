@@ -53,10 +53,10 @@ deepest matching folder wins.
 
 | Profile | Folder | Result |
 |---|---|---|
-| web | `0unsort/0web` | English audio, English subtitles burnt in, 1600 kbit/s |
-| web-rus | `0unsort/0web-rus` | Russian audio, no subtitles, 1600 kbit/s |
+| web | `0unsort/0web` | English audio, English subtitles burnt in, 1600 kbit/s, at most 1080p |
+| web-rus | `0unsort/0web-rus` | Russian audio, no subtitles, 1600 kbit/s, at most 1080p |
 | bmw | `0unsort/0bmw` | as web, cropped and scaled to the car's 1920x700 screen |
-| ipad-rus | `0unsort/0ipad-rus` | Russian audio, no subtitles, 800 kbit/s |
+| ipad-rus | `0unsort/0ipad-rus` | Russian audio, no subtitles, 800 kbit/s, at most 720p |
 
 Results go to `0conv/<profile>/` plus the source's path, with its subfolders:
 `series/Better Call Saul/s01` converts into `0conv/bmw/series/Better Call Saul/s01/`,
@@ -78,6 +78,9 @@ folder again only does what is not there yet.
 - **Audio**: the track tagged with the wanted language (`--audio_lang`,
   default `eng`). Untagged files (`.avi`): English is taken as the second
   track, other languages as the first; `--audio_enforce N` overrides
+- **Picture**: always 8-bit H.264 (a 4K WEB-DL is 10-bit HEVC, and 10-bit
+  H.264 plays almost nowhere); `--max_height 1080` scales a taller video down,
+  keeping its shape, `--video_fit` crops and scales to a screen
 - **Seasons resume**: each episode is written as `.part` and renamed when
   done; episodes whose result exists are skipped, `-y` converts them again
 - **Exit code** 0 when everything is converted or there already, 1 when an

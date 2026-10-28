@@ -47,6 +47,7 @@ def parse_args(argv=None):
         "fixup_names": False,
         "keep_tree": False,
         "local_copy": False,
+        "max_height": None,
         "root_dir": os.getcwd(),
         "out_dir": os.getcwd(),
         "overwrite": False,
@@ -92,6 +93,10 @@ def parse_args(argv=None):
     parser.add_argument("-lc", "--local_copy",
                         help="Copy each video to the local temp folder first: for sources on a network share.",
                         action="store_true")
+
+    parser.add_argument("-mh", "--max_height",
+                        help="Scale a taller video down to this height, keeping its shape: 1080 for a 4K source.",
+                        type=int)
 
     parser.add_argument("-o", "--output",
                         help="Set output directory.",
@@ -150,6 +155,7 @@ def parse_args(argv=None):
     cfg["fixup_names"] = args.fixup_names
     cfg["keep_tree"] = args.keep_tree
     cfg["local_copy"] = args.local_copy
+    if args.max_height: cfg["max_height"] = args.max_height
     if args.audio_enforce is not None: cfg["audio_enforce"] = args.audio_enforce
     if args.output: cfg["out_dir"] = args.output
     cfg["report"] = args.report
@@ -344,9 +350,12 @@ def pick_subtitles(streams):
     return i, "inside, subtitle track %d %s" % (i + 1, tag(s, "title") or tag(s, "language"))
 
 def video_filters(cfg, width, height):
-    """Crop and scale for --video_fit, or --settings_video."""
+    """Crop and scale for --video_fit, or --max_height and --settings_video."""
     if cfg["video_fit"] is None:
-        return [cfg["settings_video"]] if cfg["settings_video"] else []
+        out = []
+        if cfg["max_height"] and height > cfg["max_height"]:
+            out.append("scale=w=-2:h=%d" % cfg["max_height"])  # -2: the width that keeps the shape, even
+        return out + ([cfg["settings_video"]] if cfg["settings_video"] else [])
     fit_w, fit_h = cfg["video_fit"]
     if width <= height or fit_w <= fit_h:
         raise ValueError("video_fit works only from landscape to landscape: %dx%d to %dx%d"
@@ -500,6 +509,9 @@ def convert_one(cfg, e):
                   "-i", src,
                   # Video setting
                   "-map", "0:%d" % v["index"], "-c:v", "libx264",
+                  # 8 bits: from a 10-bit source x264 makes High 10, which phones,
+                  # browsers and cars do not play
+                  "-pix_fmt", "yuv420p",
                   # Audio setting
                   "-map", astream, "-c:a", "aac",
                   # TODO: extract into param. These key turns sound into stereo
