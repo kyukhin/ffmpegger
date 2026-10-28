@@ -156,7 +156,13 @@ needed; the next job runs the new code.
 `power.py --library /mnt/lib off <name>` (or `off-when-idle`) leaves a command
 in `.convert/control/` that the worker carries out within a minute, also while
 it converts, with `shutdown /s /t 60` (cancel on the machine with `shutdown /a`);
-`status` lists the workers' heartbeats from `.convert/workers/`. Wake-on-LAN
+`status` lists the workers' heartbeats from `.convert/workers/`, which also say
+who is logged in to Windows. `power.py auto`, run every minute on the server,
+wakes a worker that is off when jobs wait (again every 10 minutes while it stays
+off) and switches it off once the queue has been empty and the worker idle for
+10 minutes, but only a machine it woke itself and only while nobody is logged
+in: a machine someone switched on or logged in to is theirs. Its memory and
+events are in `.convert/power/<name>.json`. Wake-on-LAN
 needs, on an ASUS board, Advanced → APM Configuration → Power On By PCI-E
 Enabled and ErP Ready Disabled; in Windows, the network card's Wake on Magic
 Packet and Enable PME, its "allow this device to wake the computer" and "only a

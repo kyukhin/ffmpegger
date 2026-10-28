@@ -206,3 +206,69 @@ def test_worker_heartbeat_and_power_commands(tmp_path, monkeypatch):
     assert power.main(["--library", str(lib), "off", "pc"]) == 0
     assert power.main(["--library", str(lib), "cancel", "pc"]) == 0
     assert not os.path.exists(jobs.control_file(str(lib), "pc"))
+
+
+def test_power_auto(tmp_path, monkeypatch):
+    import datetime
+    import power
+    lib = str(tmp_path / "lib")
+    jobs.ensure(lib)
+    sent = []
+    monkeypatch.setattr(power, "wake", lambda mac, interface=None, broadcasts=None: sent.append(mac))
+    t0 = datetime.datetime(2026, 10, 28, 12, 0).timestamp()
+
+    def beat(at, state="idle", users=()):
+        os.makedirs(os.path.dirname(jobs.worker_file(lib, "pc")), exist_ok=True)
+        seen = datetime.datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
+        jobs.write(jobs.worker_file(lib, "pc"), {"name": "pc", "seen": seen, "state": state,
+                                                  "users": list(users) if users is not None else None})
+
+    def run(minutes):
+        return power.auto(lib, "pc", "bc:fc:e7:b5:d3:30", idle_off=10, wake_every=10, now=t0 + minutes * 60)
+
+    # Off with nothing to do: left alone. A job comes: woken, then again only after wake_every
+    assert run(0) is None and sent == []
+    put(tmp_path / "lib", "1-job", path="x")
+    assert run(1)[0] == "wake" and len(sent) == 1
+    assert run(5) is None and len(sent) == 1
+    assert run(11)[0] == "stuck" and len(sent) == 2
+
+    # It came up, took the job and finished it: idle for 10 minutes with nobody logged in, then off
+    os.remove(jobs.file(lib, "queue", "1-job"))
+    beat(t0 + 12 * 60)
+    assert run(12) is None
+    beat(t0 + 21 * 60)
+    assert run(21) is None
+    beat(t0 + 22 * 60)
+    assert run(22)[0] == "off"
+    assert jobs.read(jobs.control_file(lib, "pc"))["action"] == "off"
+    assert [e["kind"] for e in jobs.read(jobs.power_file(lib, "pc"))["events"]] == ["wake", "stuck", "off"]
+
+
+def test_power_auto_leaves_people_alone(tmp_path, monkeypatch):
+    import datetime
+    import power
+    lib = str(tmp_path / "lib")
+    jobs.ensure(lib)
+    monkeypatch.setattr(power, "wake", lambda *a, **k: None)
+    t0 = datetime.datetime(2026, 10, 28, 12, 0).timestamp()
+
+    def beat(at, users):
+        os.makedirs(os.path.dirname(jobs.worker_file(lib, "pc")), exist_ok=True)
+        seen = datetime.datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
+        jobs.write(jobs.worker_file(lib, "pc"), {"name": "pc", "seen": seen, "state": "idle", "users": users})
+
+    # Switched on by hand: never woken by us, so never switched off by us
+    for m in range(0, 30, 5):
+        beat(t0 + m * 60, [])
+        assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff", now=t0 + m * 60) is None
+
+    # Woken by us, but someone logged in, or it cannot tell who is: left on
+    put(tmp_path / "lib", "1-job", path="x")
+    assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff", now=t0 + 3600)[0] == "wake"
+    os.remove(jobs.file(lib, "queue", "1-job"))
+    for users in (["kyukh"], None, []):
+        for m in range(61, 90, 5):
+            beat(t0 + m * 60, users)
+            assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff", now=t0 + m * 60) is None
+    assert not os.path.exists(jobs.control_file(lib, "pc"))

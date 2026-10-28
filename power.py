@@ -6,6 +6,8 @@
     power.py --library /mnt/lib off-when-idle caligula   # ... once the queue is empty
     power.py --library /mnt/lib cancel caligula     # forget a command not yet carried out
     power.py --library /mnt/lib status              # every worker's last heartbeat
+    power.py --library /mnt/lib auto --name caligula --mac bc:fc:e7:b5:d3:30 --interface eth0
+                                                    # once a minute: wake for jobs, off when idle (see auto)
 
 Off goes through the worker (worker.py), which reads .convert/control/<name>.json
 on the share, also while it converts; so the worker must be running, which it
@@ -21,6 +23,7 @@ import sys
 from ffmpegger import jobs
 
 ONLINE = 180  # seconds: a worker seen more recently than this is on (it beats every 20 to 60 s)
+EVENTS_KEEP = 20
 
 
 def magic_packet(mac):
@@ -58,6 +61,63 @@ def statuses(library):
     return out
 
 
+def ts(iso):
+    return datetime.datetime.fromisoformat(iso).timestamp() if iso else None
+
+
+def auto(library, name, mac, interface=None, idle_off=10, wake_every=10, now=None):
+    """One look, run every minute on the torrent server. Jobs waiting and the worker off: wake it, again
+    every wake_every minutes while it stays off. The worker on, woken by this, nobody logged in since,
+    the queue empty and the worker idle for idle_off minutes: switch it off. A machine someone switched
+    on or logged in to is theirs and is left alone. Returns the event it caused, or None; the events
+    are kept in .convert/power/<name>.json for the bot."""
+    now = now or datetime.datetime.now().timestamp()
+    path = jobs.power_file(library, name)
+    try:
+        st = jobs.read(path)
+    except (OSError, ValueError):
+        st = {}
+    try:
+        beat = jobs.read(jobs.worker_file(library, name))
+    except (OSError, ValueError):
+        beat = None
+    online = bool(beat) and now - ts(beat["seen"]) < ONLINE
+    waiting = len(jobs.listing(library, "queue"))
+    mine = [i for i, j in jobs.listing(library, "running") if j.get("worker") == name]
+    users = beat.get("users") if beat else None
+    event = None
+
+    if online:
+        st["wake_tries"] = 0
+        if users:
+            st["woken"] = None  # someone logged in: their session from now on
+        if st.get("woken") and users == [] and not waiting and not mine and beat.get("state") == "idle":
+            st["idle_since"] = st.get("idle_since") or now
+            if now - st["idle_since"] >= idle_off * 60:
+                os.makedirs(os.path.dirname(jobs.control_file(library, name)), exist_ok=True)
+                jobs.write(jobs.control_file(library, name), {"action": "off", "at": jobs.now(), "by": "power.py auto"})
+                event = ("off", "switching off: nothing to do for %d min, nobody logged in" % idle_off)
+                st["woken"] = st["idle_since"] = None
+        else:
+            st["idle_since"] = None
+    else:
+        st["idle_since"] = None
+        if not waiting:
+            st["wake_tries"] = 0
+        elif not st.get("last_wake") or now - st["last_wake"] >= wake_every * 60:
+            wake(mac, interface)
+            st["last_wake"], st["woken"] = now, now
+            st["wake_tries"] = st.get("wake_tries", 0) + 1
+            event = (("wake", "woken: %d job%s waiting" % (waiting, "" if waiting == 1 else "s"))
+                     if st["wake_tries"] == 1 else
+                     ("stuck", "still off after %d wake packets, %d jobs waiting" % (st["wake_tries"], waiting)))
+    if event:
+        st["events"] = (st.get("events", []) + [{"t": jobs.now(), "kind": event[0], "text": event[1]}])[-EVENTS_KEEP:]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    jobs.write(path, st)
+    return event
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Switch the converting desktop on and off.")
     p.add_argument("--library", help="library root on this server (for off, off-when-idle, cancel, status)")
@@ -69,6 +129,12 @@ def main(argv=None):
     for action in ("off", "off-when-idle", "cancel"):
         sub.add_parser(action).add_argument("name", help="the worker's name, its machine's hostname")
     sub.add_parser("status")
+    au = sub.add_parser("auto")
+    au.add_argument("--name", required=True)
+    au.add_argument("--mac", required=True)
+    au.add_argument("--interface")
+    au.add_argument("--idle-off", type=int, default=10, help="minutes idle before switching off a machine it woke")
+    au.add_argument("--wake-every", type=int, default=10, help="minutes between wake packets while it stays off")
     a = p.parse_args(argv)
 
     if a.action == "wake":
@@ -77,6 +143,11 @@ def main(argv=None):
         return 0
     if not a.library:
         p.error("--library is needed for " + a.action)
+    if a.action == "auto":
+        event = auto(a.library, a.name, a.mac, a.interface, a.idle_off, a.wake_every)
+        if event:
+            print("%s: %s" % (a.name, event[1]))
+        return 0
     if a.action == "status":
         for name, beat, ago in statuses(a.library):
             state = ("on, " + beat["state"] + (" " + beat["job"] if beat.get("job") else "")) if ago < ONLINE \

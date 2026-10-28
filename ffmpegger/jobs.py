@@ -9,6 +9,7 @@ also over SMB:
     .convert/failed/   something skipped or failed, see the .log and .report.json
     .convert/workers/<name>.json  each worker's heartbeat: when it was last seen, what it does
     .convert/control/<name>.json  a command for a worker from power.py: off, off-when-idle
+    .convert/power/<name>.json    power.py auto's memory for a worker: whether it woke it, events
 
 Paths inside a job are relative to the library root with / as the separator,
 so the server (/mnt/lib) and Windows (\\\\server\\lib) read them the same way."""
@@ -78,6 +79,10 @@ def worker_file(library, name):
 
 def control_file(library, name):
     return os.path.join(library, QUEUE, "control", name + ".json")
+
+
+def power_file(library, name):
+    return os.path.join(library, QUEUE, "power", name + ".json")
 
 
 def file(library, state, job_id, ext=".json"):

@@ -101,12 +101,51 @@ def output_of(library, job, src):
     return local_path(library, rel), ["--keep_tree"]
 
 
+def logged_in():
+    """Who is logged in to Windows (at the screen or over remote desktop): a sorted list, or None when
+    that cannot be told (not Windows, or the API failed). power.py never switches off a machine with
+    someone logged in, nor one it cannot tell about."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class SessionInfo(ctypes.Structure):
+            _fields_ = [("SessionId", wintypes.DWORD), ("pWinStationName", wintypes.LPWSTR), ("State", ctypes.c_int)]
+
+        wts = ctypes.WinDLL("wtsapi32")
+        wts.WTSEnumerateSessionsW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                                              ctypes.POINTER(ctypes.POINTER(SessionInfo)), ctypes.POINTER(wintypes.DWORD)]
+        wts.WTSQuerySessionInformationW.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_int,
+                                                    ctypes.POINTER(wintypes.LPWSTR), ctypes.POINTER(wintypes.DWORD)]
+        wts.WTSFreeMemory.argtypes = [ctypes.c_void_p]
+        sessions, count = ctypes.POINTER(SessionInfo)(), wintypes.DWORD()
+        if not wts.WTSEnumerateSessionsW(None, 0, 1, ctypes.byref(sessions), ctypes.byref(count)):
+            return None
+        users = set()
+        try:
+            for i in range(count.value):
+                name, size = wintypes.LPWSTR(), wintypes.DWORD()
+                # 5 = WTSUserName; session 0, where this worker runs before logon, has none
+                if wts.WTSQuerySessionInformationW(None, sessions[i].SessionId, 5, ctypes.byref(name), ctypes.byref(size)):
+                    if name.value:
+                        users.add(name.value)
+                    wts.WTSFreeMemory(name)
+        finally:
+            wts.WTSFreeMemory(sessions)
+        return sorted(users)
+    except Exception as e:  # never let this stop the worker
+        log.info("cannot tell who is logged in: %s", e)
+        return None
+
+
 def heartbeat(library, name, state, job_id=None):
-    """When this worker was last seen and what it does, for power.py status and the bot."""
+    """When this worker was last seen, what it does and who is logged in, for power.py and the bot."""
     path = jobs.worker_file(library, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED,
-                      "pid": os.getpid(), "os": platform.platform()})
+                      "users": logged_in(), "pid": os.getpid(), "os": platform.platform()})
 
 
 def command(library, name):
