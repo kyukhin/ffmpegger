@@ -44,6 +44,7 @@ def parse_args(argv=None):
         "audio_enforce": -1,
         "audio_lang": "eng",
         "fixup_names": False,
+        "keep_tree": False,
         "root_dir": os.getcwd(),
         "out_dir": os.getcwd(),
         "overwrite": False,
@@ -81,6 +82,10 @@ def parse_args(argv=None):
     parser.add_argument("-ae", "--audio_enforce",
                         help="If failed to guess - use specified track number.",
                         type=int)
+
+    parser.add_argument("-k", "--keep_tree",
+                        help="Keep the source's subfolders in the output: s01/x.mkv -> OUTPUT/s01/x.mp4.",
+                        action="store_true")
 
     parser.add_argument("-o", "--output",
                         help="Set output directory.",
@@ -137,6 +142,7 @@ def parse_args(argv=None):
     if args.audio_lang: cfg["audio_lang"] = args.audio_lang.lower()
     if args.directory: cfg["root_dir"] = args.directory
     cfg["fixup_names"] = args.fixup_names
+    cfg["keep_tree"] = args.keep_tree
     if args.audio_enforce is not None: cfg["audio_enforce"] = args.audio_enforce
     if args.output: cfg["out_dir"] = args.output
     cfg["report"] = args.report
@@ -370,8 +376,12 @@ def convert_one(cfg, e):
     name = splitext(basename(video))[0] + ".mp4"
     if cfg["fixup_names"]:
         name = clean_name(name)
-    out = join(cfg["out_dir"], name)
     root = cfg["root_dir"] if isdir(cfg["root_dir"]) else dirname(cfg["root_dir"]) or "."
+    if cfg["keep_tree"]:
+        # The season folders of a show come along: series/Show/s01/x.mkv -> OUTPUT/s01/x.mp4
+        name = join(relpath(dirname(video), root), name)
+    name = os.path.normpath(name)
+    out = join(cfg["out_dir"], name)
     item = {"video": relpath(video, root), "output": name, "status": "", "reason": "",
             "audio": "", "subtitles": "", "seconds": 0}
 
@@ -442,6 +452,7 @@ def convert_one(cfg, e):
     # Written under another name and renamed when complete: an interrupted run
     # leaves no half file that a later run would take for done
     part = out + ".part"
+    os.makedirs(dirname(out), exist_ok=True)
     started = time.time()
     with tempfile.TemporaryDirectory(prefix="ffmpegger-") as tmp:
         if cfg["size_target"]:

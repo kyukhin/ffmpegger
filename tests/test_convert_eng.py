@@ -264,3 +264,23 @@ def test_cyrillic_names_with_a_windows_console_encoding(tmp_path):
                                env=dict(os.environ, PYTHONIOENCODING="cp1252"))
     assert code == 0, open(str(log), encoding="utf-8").read()[-2000:]
     assert "Тест" in open(str(log), encoding="utf-8").read()
+
+
+@needs_ffmpeg
+def test_keep_tree_converts_a_show_season_by_season(tmp_path):
+    show = tmp_path / "series" / "Better Call Saul"
+    make_video(show / "s01" / "BCS.S01E01.mkv")
+    make_video(show / "s02" / "BCS.S02E01.mkv")
+    out = tmp_path / "0conv" / "web" / "series" / "Better Call Saul"
+    report = str(tmp_path / "report.json")
+    args = ["-d", str(show), "-o", str(out), "-k", "-f", "-s", "50", "-r", report]
+    assert ce.main(args) == 0
+    assert sorted(os.path.relpath(os.path.join(p, f), str(out)) for p, _, fs in os.walk(str(out)) for f in fs) == \
+        [os.path.join("s01", "BCS.S01E01.mp4"), os.path.join("s02", "BCS.S02E01.mp4")]
+
+    # A new season arrives: only it is converted
+    make_video(show / "s03" / "BCS.S03E01.mkv")
+    assert ce.main(args) == 0
+    r = json.load(open(report))
+    assert r["counts"] == {"converted": 1, "exists": 2, "skipped": 0, "failed": 0}
+    assert r["videos"][2]["output"] == os.path.join("s03", "BCS.S03E01.mp4")
