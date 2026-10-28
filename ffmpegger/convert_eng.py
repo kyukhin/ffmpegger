@@ -1,12 +1,35 @@
 #!/usr/bin/python3
-
-# TODO: check if jq exists?
+"""Converts a movie or a whole season to MP4 (H.264 + AAC stereo) with English
+subtitles burnt in. Picks the audio and subtitle tracks itself and never
+touches the source files. Runs on Linux, macOS and Windows; needs only
+Python 3.8+ and ffmpeg/ffprobe in PATH. See README.md."""
 
 import argparse
+import datetime
+import json
 import os
-from os.path import basename, getsize, join, splitext
+from os.path import basename, dirname, isdir, join, realpath, relpath, splitext
 import re
 import subprocess
+import sys
+import tempfile
+import time
+
+VIDEO_EXTS = (".avi", ".m4v", ".mkv", ".mp4")
+SUBS_EXTS = (".srt",)
+# Subtitle codecs libass can draw. Picture subtitles (PGS, VobSub) it cannot
+TEXT_SUBS = ("subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text")
+# S01E02, s04x03, S01.E02, then 6x01. Only the file name is searched: a folder
+# called 1920x1080 is not an episode
+EPISODE = [re.compile(r"s(\d{1,2})[ ._-]?[ex](\d{1,3})", re.IGNORECASE),
+           re.compile(r"(?<!\d)(\d{1,2})x(\d{2,3})(?!\d)", re.IGNORECASE)]
+# en, eng, english as a word, also 2xEng from release names
+ENGLISH = re.compile(r"(?:^|[^a-z])(?:\d+x)?(?:en|eng|english)(?:[^a-z]|$)", re.IGNORECASE)
+# Worse kinds of subtitles: forced has only the foreign bits, SDH adds [door creaks]
+FORCED = re.compile(r"forced", re.IGNORECASE)
+SDH = re.compile(r"(?:^|[^a-z])(?:sdh|hi|cc)(?:[^a-z]|$)", re.IGNORECASE)
+SAMPLE = re.compile(r"(?:^|[^a-z])sample(?:[^a-z]|$)", re.IGNORECASE)
+BAD_CHARS = [' ', '(', ')', '[', ']', '\'', '«', '»', ',', '’']
 
 def parse_resolution(resolution):
     try:
@@ -16,13 +39,15 @@ def parse_resolution(resolution):
         raise argparse.ArgumentTypeError("Resolution must be in the format "\
                                          "WIDTHxHEIGHT (e.g., 1280x1024)")
 
-def parse_args():
+def parse_args(argv=None):
     cfg = {
         "audio_enforce": -1,
+        "audio_lang": "eng",
         "fixup_names": False,
         "root_dir": os.getcwd(),
         "out_dir": os.getcwd(),
         "overwrite": False,
+        "report": None,
         "verbose": False,
         "settings_video": None,
         "video_fit": None,
@@ -41,12 +66,16 @@ def parse_args():
                         help="Do not guess audio track, set it explicitly.",
                         type=str)
 
+    parser.add_argument("-al", "--audio_lang",
+                        help="Language of the audio track to pick. Default: eng.",
+                        type=str)
+
     parser.add_argument("-d", "--directory",
-                        help="Scan given directory, instead of current.",
+                        help="Scan given directory or take one video file, instead of current directory.",
                         type=str)
 
     parser.add_argument("-f", "--fixup_names",
-                        help="Remove special characters from filenames.",
+                        help="Remove special characters from output file names. Source files are never renamed.",
                         action="store_true")
 
     parser.add_argument("-ae", "--audio_enforce",
@@ -60,6 +89,10 @@ def parse_args():
     parser.add_argument("-q", "--quality",
                         help="Set video quality. Google H264's crf for details. Default: 16.",
                         type=int)
+
+    parser.add_argument("-r", "--report",
+                        help="Write a JSON report here, updated after every video.",
+                        type=str)
 
     parser.add_argument("-s", "--size_target",
                         help="Set target video bitrate in kbs/s.",
@@ -95,16 +128,18 @@ def parse_args():
                         type=parse_resolution)
 
     parser.add_argument("-y", "--yes",
-                        help="Overwrite output file if exists.",
+                        help="Convert again even if the output file exists.",
                         action="store_true")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cfg["a_stream"] = args.astream
+    if args.audio_lang: cfg["audio_lang"] = args.audio_lang.lower()
     if args.directory: cfg["root_dir"] = args.directory
     cfg["fixup_names"] = args.fixup_names
     if args.audio_enforce is not None: cfg["audio_enforce"] = args.audio_enforce
     if args.output: cfg["out_dir"] = args.output
+    cfg["report"] = args.report
     cfg["verbose"] = args.verbose
     if args.settings_video: cfg["settings_video"] = args.settings_video
     if args.settings_subtitles: cfg["settings_subtitles"] = args.settings_subtitles
@@ -124,352 +159,333 @@ def parse_args():
 
     return cfg
 
-def scan_videos(cfg):
-    video_exts = (".avi", ".m4v", ".mkv", ".mp4")
-    subs_exts = (".srt")
+def episode_of(path):
+    """(season, episode) from a file name, or None."""
+    name = basename(path)
+    for regex in EPISODE:
+        m = regex.search(name)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
 
+def clean_name(name):
+    """Special characters to dots, runs of dots to one:
+    "Some Show (2001) [x].mkv" -> "Some.Show.2001.x.mkv"."""
+    for char in BAD_CHARS:
+        name = name.replace(char, '.')
+    return re.sub(r'\.\.+', '.', name).lstrip('.')
+
+def filter_path(path):
+    """A path as a value inside -vf. ffmpeg unescapes it twice, first as a
+    filtergraph, then as an option value, so it is escaped for both."""
+    if os.sep == "\\":
+        # C:/x and //host/share/x work on Windows and need no backslashes
+        path = path.replace("\\", "/")
+    for char in "\\':":
+        path = path.replace(char, "\\" + char)
+    for char in "\\'[],;":
+        path = path.replace(char, "\\" + char)
+    return path
+
+def scan_videos(cfg):
+    """Videos and English .srt files under root_dir. root_dir can be a single
+    video: then its subtitles are the .srt files next to it named after it."""
+    root = cfg["root_dir"]
     print("INFO: Searching for video files")
+    if not isdir(root):
+        folder, stem = dirname(root) or ".", splitext(basename(root))[0]
+        s_list = [join(folder, f) for f in sorted(os.listdir(folder))
+                  if f.lower().endswith(SUBS_EXTS) and f.startswith(stem) and ENGLISH.search(f[len(stem):])]
+        return [root], s_list
+
+    out = realpath(cfg["out_dir"])
     v_list = []
     s_list = []
-    for root, dirs, files in os.walk(cfg["root_dir"]):
-        if cfg["verbose"]: print("DBG: Entering", root)
-
-        for fn in files:
-            if cfg["verbose"]: print("DBG:  Checking:", fn, end=" ")
-            if fn.endswith(video_exts):
-                if cfg["verbose"]: print("VIDEO!")
-                v_list.append(join(root, fn))
-
-            if fn.endswith(subs_exts):
-                if cfg["verbose"]: print("DBG: SUBS!", end=" ")
-                if "eng".casefold() in join(root, fn).casefold() or \
-                   ".en.".casefold() in join(root, fn).casefold():
-                    if cfg["verbose"]: print("ENG!!!")
-                    s_list.append(join(root, fn))
-                else:
-                    if cfg["verbose"]: print("not eng :(")
+    for path, dirs, files in os.walk(root):
+        if cfg["verbose"]: print("DBG: Entering", path)
+        # Results may live inside the source (0out next to the episodes): never convert them again
+        dirs[:] = sorted(d for d in dirs if realpath(join(path, d)) != out)
+        for fn in sorted(files):
+            full = join(path, fn)
+            rel = relpath(full, root)
+            if fn.lower().endswith(VIDEO_EXTS):
+                if SAMPLE.search(rel):
+                    print("INFO: sample, skipped:", rel)
+                    continue
+                v_list.append(full)
+            elif fn.lower().endswith(SUBS_EXTS):
+                # The path inside the torrent counts (Sub.Eng/01.srt), not the torrent's own name
+                if ENGLISH.search(rel):
+                    s_list.append(full)
+                elif cfg["verbose"]:
+                    print("DBG: not English subtitles:", rel)
 
     return v_list, s_list
 
+def subtitles_rank(path):
+    """Lower is better: full subtitles over SDH over forced, then the bigger file."""
+    name = join(basename(dirname(path)), basename(path))
+    kind = 2 if FORCED.search(name) else 1 if SDH.search(name) else 0
+    return kind, -os.path.getsize(path)
+
+def best_subtitles(paths):
+    return min(paths, key=subtitles_rank) if paths else None
+
 def analyze_episodes(cfg, v_list, s_list):
+    """(season, episode, video, external subtitles or None) for every video.
+    A movie takes the best English .srt there is. An episode takes the best one
+    with its season and episode, otherwise subtitles inside the video are used."""
+    if len(v_list) == 1:
+        print("INFO: Detected single video. Treat it as a movie")
+        return [(None, None, v_list[0], best_subtitles(s_list))]
+
+    print("INFO: Looks like directory contains series.")
+    by_episode = {}
+    for s in s_list:
+        ep = episode_of(s)
+        if ep is None:
+            print("WRN: no season and episode in the name, ignored:", s)
+            continue
+        by_episode.setdefault(ep, []).append(s)
+
     e_list = []
-    regex = re.compile(r"s?(\d+)[ex](\d+)", flags=re.IGNORECASE)
     for v in v_list:
-        if cfg["verbose"] : print("Analyzing", v)
-        v_pair = regex.findall(v)
-        season = None
-        episode = None
-        if not v_pair:
-            print("WRN: looks like filenames are not in sXXeYY or sXXxYY format. External subtitles match won't work")
-        else:
-            if len(v_pair[0]) != 2:
-                print("ERR: failed to extract Season/Episode from name. Exiting", v)
-                return
-            else:
-                season = v_pair[0][0]
-                episode = v_pair[0][1]
-
-        # Now let's try to match corresponding external subtitles file
-        subs_file = None
-        if s_list and v_pair:
-            matched = False
-            for s in s_list:
-                s_pair = regex.findall(s)
-                if len(s_pair[0]) != 2:
-                    print("ERR: failed to extract Season/Episode from name. Exiting", s)
-                    return
-                if v_pair == s_pair:
-                    print("MATCHED:", v, s)
-                    matched = True
-                    subs_file = s
-                    break
-
-            if not matched:
-                print("ERR: external subtitles exist, but failed to match any with video", v)
-                return
-
-        e_list.append((season, episode, v, subs_file))
-        print(regex.findall(v))
-
+        ep = episode_of(v)
+        if ep is None:
+            print("WRN: looks like filenames are not in sXXeYY or sXXxYY format. External subtitles match won't work:", v)
+            e_list.append((None, None, v, None))
+            continue
+        subs = best_subtitles(by_episode.get(ep, []))
+        if subs:
+            print("MATCHED:", v, subs)
+        e_list.append((ep[0], ep[1], v, subs))
     return e_list
 
-# Arg cmd is a _list_ of options to pass to ffprobe
-def exec_ffprobe_json(cfg, video, cmd):
-    ffprobe_cmd=["ffprobe",
-                 "-i", video,
-                 "-of", "json",
-                 "-v", "panic",
-                 "-show_entries"]
-    ffprobe_cmd += cmd
-    if cfg["verbose"]: print(ffprobe_cmd)
-    res = subprocess.run(ffprobe_cmd, capture_output=True)
-    if cfg["verbose"]: print(res)
+def probe(cfg, video):
+    """The video's streams as ffprobe sees them, or None."""
+    cmd = ["ffprobe", "-v", "error", "-of", "json", "-show_entries",
+           "stream=index,codec_type,codec_name,width,height:stream_tags=language,title:"
+           "stream_disposition=attached_pic,forced,hearing_impaired",
+           "-i", video]
+    if cfg["verbose"]: print("DBG:", cmd)
+    res = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace")
     if res.returncode != 0:
-        print("ERR: error during ffprobe execution. Unable find video track")
-        return
+        print("ERR: ffprobe failed:", res.stderr.strip()[-500:])
+        return None
+    return json.loads(res.stdout).get("streams", [])
 
-    return res
+def tag(stream, name):
+    return (stream.get("tags") or {}).get(name, "")
 
-# Arg cmd is a string with filter.
-def jq_extract_value(cfg, input, cmd):
-    jq_filter_cmd=["jq", cmd, "-"]
-    if cfg["verbose"]: print("DBG:", jq_filter_cmd)
-    res = subprocess.run(jq_filter_cmd, input=input, capture_output=True)
-    if cfg["verbose"]: print("DBG:", res)
-    if res.returncode != 0:
-        print("ERR: error during execution of jq. Command was",
-              jq_filter_cmd)
-        return
-    res = res.stdout.decode("utf-8").rstrip()
-    return res
+def flag(stream, name):
+    return (stream.get("disposition") or {}).get(name, 0) == 1
 
-# Search a video file for English subtitles.
-# Return result as a correct argument for ffmpeg convertor
-def scan_eng_subtitles(cfg, video):
-    cmd = ["stream=index,codec_type:stream_tags=language,title",
-           "-select_streams", "s"]
-    res = exec_ffprobe_json(cfg, video, cmd)
+def is_lang(stream, lang):
+    """eng matches eng and en."""
+    return tag(stream, "language").lower() in (lang, lang[:2])
 
-    res = jq_extract_value(cfg, res.stdout,
-                           '[.streams[] | ((.tags.language // "") | test("eng"; "i")) or ((.tags.title // "") | test("eng"; "i"))] | index(true)')
+def pick_video(streams):
+    """The first video stream that is not a cover picture."""
+    for s in streams:
+        if s.get("codec_type") == "video" and not flag(s, "attached_pic"):
+            return s
+    return None
 
-    if res == "null":
-        print("ERR: cannot find English subtitle track.")
-        return
+def pick_audio(cfg, streams):
+    """("0:N", why) or (None, why)."""
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
+    lang = cfg["audio_lang"]
+    for s in audio:
+        if is_lang(s, lang):
+            return "0:%d" % s["index"], "%s by language tag" % lang
+    print("WRN: cannot find %s audio track by language tag." % lang)
+    if cfg["audio_enforce"] != -1:
+        print("INF: enforcing track", cfg["audio_enforce"])
+        return "0:%d" % cfg["audio_enforce"], "enforced"
+    # Without tags (.avi) English is usually the second track, Russian the first
+    nth = 1 if lang == "eng" else 0
+    if len(audio) <= nth:
+        return None, "no %s audio track: %d audio tracks, none tagged %s" % (lang, len(audio), lang)
+    print("WRN: falling back to audio track %d of %d" % (nth + 1, len(audio)))
+    return "0:%d" % audio[nth]["index"], "track %d of %d, untagged" % (nth + 1, len(audio))
 
-    # Strip newline from result
-    res = video + ":si=" + res
-    print("INF: OK: found subtitles track inside video file", res)
-    return res
+def pick_subtitles(streams):
+    """(si, why) for English text subtitles inside the video, or (None, why).
+    si counts subtitle streams only, as the subtitles filter wants it."""
+    subs = [s for s in streams if s.get("codec_type") == "subtitle"]
+    english = [(i, s) for i, s in enumerate(subs)
+               if re.search("eng", tag(s, "language"), re.IGNORECASE) or re.search("eng", tag(s, "title"), re.IGNORECASE)]
+    if not english:
+        return None, "no English subtitles in the video or next to it"
+    text = [(i, s) for i, s in english if s.get("codec_name") in TEXT_SUBS]
+    if not text:
+        return None, "English subtitles in the video are pictures (%s), they cannot be burnt in" % english[0][1].get("codec_name")
 
-# Search a video file for English audio track.
-# Usually, normal English audio track appears first.
-# All other "commentary" and alike are later.
-# Return result as a correct argument for ffmpeg convertor
-def scan_eng_astream(cfg, video):
-    cmd = ["stream=index,codec_type:stream_tags=language",
-           "-select_streams", "a"]
-    res = exec_ffprobe_json(cfg, video, cmd)
+    def rank(pair):
+        s = pair[1]
+        kind = (2 if flag(s, "forced") or FORCED.search(tag(s, "title"))
+                else 1 if flag(s, "hearing_impaired") or SDH.search(tag(s, "title")) else 0)
+        return kind, pair[0]
 
-    res = jq_extract_value(cfg, res.stdout,
-                           "[.streams[] | select(.tags.language==\"eng\").index][0]")
+    i, s = min(text, key=rank)
+    return i, "inside, subtitle track %d %s" % (i + 1, tag(s, "title") or tag(s, "language"))
 
-    if res == "null" or res is None:
-        print("WRN: cannot find English audio track by language tag.")
-        if cfg["audio_enforce"] != -1:
-            res = str(cfg["audio_enforce"])
-            print("INF: enforcing track", res)
-        else:
-            # Fall back to second audio stream (first is usually Russian)
-            res2 = exec_ffprobe_json(cfg, video, ["stream=index", "-select_streams", "a"])
-            res = jq_extract_value(cfg, res2.stdout, "[.streams[].index][1]")
-            if res == "null" or res is None:
-                print("ERR: no second audio stream found (need at least 2 audio streams for fallback).")
-                return
-            print("WRN: falling back to second audio stream (assuming first is Russian):", res)
+def video_filters(cfg, width, height):
+    """Crop and scale for --video_fit, or --settings_video."""
+    if cfg["video_fit"] is None:
+        return [cfg["settings_video"]] if cfg["settings_video"] else []
+    fit_w, fit_h = cfg["video_fit"]
+    if width <= height or fit_w <= fit_h:
+        raise ValueError("video_fit works only from landscape to landscape: %dx%d to %dx%d"
+                         % (width, height, fit_w, fit_h))
+    d = fit_w / fit_h
+    # Crop
+    crop_h = width / d
+    crop_h = int(round(crop_h) + (round(crop_h) % 2)) # Even int for codec
+    shift_y = (height - crop_h) / 2
+    crop = "crop=w="+str(width)+":h="+str(crop_h)+":x=0"+":y="+str(shift_y)
+    # Scale
+    scale = "scale=w="+str(fit_w)+":h="+str(fit_h)
+    print("INFO: video track conversion command is", crop + "," + scale)
+    return [crop, scale]
 
-    res = "0:" + res
-    print("INFO: OK: found audio track inside video file", res)
-    return res
-
-def scan_vstream(cfg, video):
-    # 1. Search for video stream
-    cmd = ["stream=index", "-select_streams", "v"]
-    res = exec_ffprobe_json(cfg, video, cmd)
-
-    track = jq_extract_value(cfg, res.stdout,
-                             "[.streams[].index][0]")
-    if track == "null":
-        print("ERR: cannot find video stream.")
-        return
-
-    # 2. Detect original resolution
-    # NB: do not specify stream type as it will make indexing local.
-    # E.g. if video stream indices were 0 and 7 passing prefix "v:7"
-    # will led to error, as for "v:" only 0 and 1 will be valid.
-    cmd = ["stream=width,height", "-select_streams", track]
-    res = exec_ffprobe_json(cfg, video, cmd)
-
-    w = jq_extract_value(cfg, res.stdout,
-                         "[.streams[].width][0]")
-    h = jq_extract_value(cfg, res.stdout,
-                         "[.streams[].height][0]")
-
-    res = "0:" + track
-    print("INFO: OK: found video track", res, "Resolution", w+"x"+h)
-    return res, int(w), int(h)
-
-# Fixup filenames in a root dir. The function uses config's root dir
-# and walks (top down) through directories and file recursively.
-# During the walk, it renames paths replacing strange characters
-# with dots. It then joins series of dots into single dot make
-# name loo more nicely.
-#
-# Strange symbols are stored in `bad_chars` array.
-def fixup_names(cfg):
-    root = cfg["root_dir"]
-
-    bad_chars = [' ', '(', ')', '[', ']', '\'', '«', '»', ',', '’']
-    os.chdir(root)
-    for path, subdir, files in os.walk(root, topdown=False):
-        for f in subdir:
-            copy_f = f
-            for char in copy_f:
-                if (char in bad_chars): copy_f = copy_f.replace(char, '.')
-
-            # Replace runs of two and more dots with single dot.
-            copy_f = re.sub(r'\.\.+', '.', copy_f)
-
-            os.rename(os.path.join(path, f),
-                      os.path.join(path, copy_f))
-            print("INFO: Renamed", f, "into", copy_f)
-        for f in files:
-            copy_f = f
-            for char in copy_f:
-                if (char in bad_chars): copy_f = copy_f.replace(char, '.')
-
-            # Replace runs of two and more dots with single dot.
-            copy_f = re.sub(r'\.\.+', '.', copy_f)
-
-            os.rename(os.path.join(path, f),
-                      os.path.join(path, copy_f))
-            print("INFO: Renamed ", f, "into ", copy_f)
-    return
+def run_ffmpeg(cmd):
+    """None on success, otherwise the end of ffmpeg's error output.
+    In a terminal ffmpeg shows its progress; under a worker its output is kept
+    and printed only if it fails."""
+    print(cmd)
+    if sys.stdout.isatty():
+        return None if subprocess.run(cmd).returncode == 0 else "see the output above"
+    res = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace")
+    if res.returncode == 0:
+        return None
+    tail = res.stderr.strip().splitlines()[-20:]
+    print("\n".join(tail))
+    return tail[-1] if tail else "exit code %d" % res.returncode
 
 def convert_one(cfg, e):
-    video = e[2]
-    astream = cfg["a_stream"]
-    out = splitext(join(cfg["out_dir"], basename(video)))[0] + ".mp4"
+    """Converts one video. Returns its report entry: status converted,
+    exists (done before), skipped (no subtitles or audio) or failed."""
+    video, ext_subs = e[2], e[3]
+    name = splitext(basename(video))[0] + ".mp4"
+    if cfg["fixup_names"]:
+        name = clean_name(name)
+    out = join(cfg["out_dir"], name)
+    root = cfg["root_dir"] if isdir(cfg["root_dir"]) else dirname(cfg["root_dir"]) or "."
+    item = {"video": relpath(video, root), "output": name, "status": "", "reason": "",
+            "audio": "", "subtitles": "", "seconds": 0}
+
+    if os.path.exists(out) and not cfg["overwrite"]:
+        print("INFO: already converted, skipped:", out)
+        return dict(item, status="exists")
+
+    streams = probe(cfg, video)
+    if streams is None:
+        return dict(item, status="failed", reason="ffprobe cannot read it")
+    v = pick_video(streams)
+    if v is None:
+        print("ERR: cannot find video stream.")
+        return dict(item, status="failed", reason="no video stream")
+    print("INFO: OK: found video track 0:%d Resolution %sx%s" % (v["index"], v.get("width"), v.get("height")))
 
     subs = None
-    burn_subtitles = not cfg["subtitles_disabled"]
-    if burn_subtitles:
-        if not e[3]:
-            subs = scan_eng_subtitles(cfg, video)
+    if not cfg["subtitles_disabled"]:
+        if ext_subs:
+            subs = "subtitles=filename=" + filter_path(ext_subs)
+            item["subtitles"] = "external " + relpath(ext_subs, root)
         else:
-            subs = e[3]
-
-        if not subs:
-            if cfg["ignore_no_subtitles"]:
-                print("WRN: no subtitle stream found, proceeding without subtitles.")
-                burn_subtitles = False
+            si, why = pick_subtitles(streams)
+            if si is not None:
+                subs = "subtitles=filename=%s:si=%d" % (filter_path(video), si)
+                item["subtitles"] = why
+            elif cfg["ignore_no_subtitles"]:
+                print("WRN: %s, proceeding without subtitles." % why)
+                item["subtitles"] = "none: " + why
             else:
-                print("ERR: no subtitle stream defined or guessed.")
-                return False
+                print("ERR:", why)
+                return dict(item, status="skipped", reason=why)
+        if subs:
+            print("INFO: OK: subtitles", item["subtitles"])
+            if cfg["settings_subtitles"]:
+                subs += ":" + cfg["settings_subtitles"]
 
-    if not astream:
-        astream = scan_eng_astream(cfg, video)
-
-    if not astream:
-        print("ERR: no audio stream defined or guessed.")
-        return False
-
-    v_stream, orig_w, orig_h = scan_vstream(cfg, video)
-
-    vs = ""
-    if cfg["video_fit"] is not None:
-        assert(cfg["settings_video"] is None)
-        assert(orig_w > orig_h)
-        fit_w = cfg["video_fit"][0]
-        fit_h = cfg["video_fit"][1]
-        assert(fit_w > fit_h)
-
-        d = fit_w / fit_h
-        # Crop
-        crop_h = orig_w / d
-        crop_h = int(round(crop_h) + (round(crop_h) % 2)) # Even int for codec
-        shift_y = (orig_h - crop_h) / 2
-        crop = "crop=w="+str(orig_w)+":h="+str(crop_h)+":x=0"+":y="+str(shift_y)
-        # Scale
-        scale = "scale=w="+str(fit_w)+":h="+str(fit_h)
-        vs = crop+","+scale+","
-        print("INFO: video track conversion command is", vs)
+    if cfg["a_stream"]:
+        astream, item["audio"] = cfg["a_stream"], "set explicitly"
     else:
-        if cfg["settings_video"]:
-            vs = cfg["settings_video"]+","
+        astream, item["audio"] = pick_audio(cfg, streams)
+    if not astream:
+        print("ERR: no audio stream defined or guessed:", item["audio"])
+        return dict(item, status="skipped", reason=item["audio"])
+    print("INFO: OK: found audio track inside video file", astream)
 
-    if cfg["verbose"]: print("DBG: video filter setting:", vs)
+    try:
+        vf = video_filters(cfg, v.get("width") or 0, v.get("height") or 0)
+    except ValueError as err:
+        print("ERR:", err)
+        return dict(item, status="failed", reason=str(err))
+    if subs:
+        vf.append(subs)
+    if cfg["verbose"]: print("DBG: video filter setting:", vf)
 
-    ffmpeg_cmd_common_opts = [
-        "ffmpeg",
-        "-i", video,
-        # Video setting
-        "-c:v", "libx264",
-        "-map", v_stream,
+    common = ["ffmpeg", "-hide_banner", "-nostdin", "-y",
+              "-i", video,
+              # Video setting
+              "-map", "0:%d" % v["index"], "-c:v", "libx264",
+              # Audio setting
+              "-map", astream, "-c:a", "aac",
+              # TODO: extract into param. These key turns sound into stereo
+              # from, say 5.1. Nothing but mono/stereo can be played on iPhone
+              "-ac", "2"]
+    if vf:
+        common += ["-vf", ",".join(vf)]
 
-        # Audio setting
-        "-acodec", "aac",
-        "-map", astream,
-        # TODO: extract into param. These key turns sound into stereo
-        # from, say 5.1. Nothing but mono/stereo can be played on iPhone
-        "-ac", "2",
-
-        "-f", "mp4", # Force format, as /dev/null has no ext.
-        "-y",        # Allow "re-write" /dev/null w/o questions.
-    ]
-
-    # Subtitles
-    if burn_subtitles:
-        vs += "subtitles=" + subs
-        if cfg["settings_subtitles"]:
-            vs += ":" + cfg["settings_subtitles"]
-
-    if vs != "":
-        ffmpeg_cmd_common_opts += ["-vf", vs]
-
-    if cfg["overwrite"]:
-        ffmpeg_cmd_common_opts.append("-y")
-
-    if cfg["size_target"]:
-        print("Will do two pass converion as bitrate was specified")
-        ffmpeg_cmd_1 = ffmpeg_cmd_common_opts + [
-            # Video bitrate
-            "-b:v", str(cfg["size_target"])+"k",
-            "-pass", "1",
-            "/dev/null"]
-
-        ffmpeg_cmd_2 = ffmpeg_cmd_common_opts + [
-            # Video bitrate
-            "-b:v", str(cfg["size_target"])+"k",
-            "-pass", "2",
-            out
-        ]
-        print(ffmpeg_cmd_1)
-        res = subprocess.run(ffmpeg_cmd_1, capture_output=True)
-        if res.returncode == 0:
-            print ("OK: FFmpeg pass 1 finished")
+    # Written under another name and renamed when complete: an interrupted run
+    # leaves no half file that a later run would take for done
+    part = out + ".part"
+    started = time.time()
+    with tempfile.TemporaryDirectory(prefix="ffmpegger-") as tmp:
+        if cfg["size_target"]:
+            print("Will do two pass converion as bitrate was specified")
+            rate = ["-b:v", str(cfg["size_target"]) + "k"]
+            passlog = join(tmp, "pass")
+            steps = [("pass 1 ", common + rate + ["-pass", "1", "-passlogfile", passlog, "-an",
+                                                   "-f", "null", os.devnull]),
+                     ("pass 2 ", common + rate + ["-pass", "2", "-passlogfile", passlog, "-f", "mp4", part])]
         else:
-            print ("ERR: FFmpeg pass 1 failed", res.args, res.stdout, res.stderr)
-            return False
+            steps = [("", common + ["-preset", "slower", "-crf", str(cfg["quality"]), "-f", "mp4", part])]
+        for label, cmd in steps:
+            error = run_ffmpeg(cmd)
+            if error:
+                print("ERR: FFmpeg %sfailed" % label)
+                if os.path.exists(part):
+                    os.remove(part)
+                return dict(item, status="failed", reason="ffmpeg %sfailed: %s" % (label, error),
+                            seconds=round(time.time() - started))
+            print("OK: FFmpeg %sfinished" % label)
+    os.replace(part, out)
+    return dict(item, status="converted", seconds=round(time.time() - started))
 
-        print(ffmpeg_cmd_2)
-        res = subprocess.run(ffmpeg_cmd_2, capture_output=True)
-        if res.returncode == 0:
-            print ("OK: FFmpeg pass 2 finished")
-            return True
-        else:
-            print ("ERR: FFmpeg pass 2 failed", res.args, res.stdout, res.stderr)
-            return False
-    else:
-        ffmpeg_cmd = ffmpeg_cmd_common_opts + [
-            "-preset", "slower",
-            "-crf", str(cfg["quality"]),
-            out
-        ]
-        print(ffmpeg_cmd)
-        if subprocess.run(ffmpeg_cmd).returncode == 0:
-            print ("OK: FFmpeg finished")
-            return True
-        else:
-            print ("ERR: FFmpeg failed")
-            return False
+def write_report(cfg, report):
+    if not cfg["report"]:
+        return
+    tmp = cfg["report"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, cfg["report"])
 
-def main():
-    cfg = parse_args()
+def now():
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
-    if cfg["fixup_names"]:
-        print("INFO: will try to fixup filenames if needed")
-        fixup_names(cfg)
+def main(argv=None):
+    """0: everything converted or there already. 1: something was skipped or
+    failed, see the report. 2: no videos found."""
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
+    cfg = parse_args(argv)
+    report = {"root": cfg["root_dir"], "out_dir": cfg["out_dir"], "started": now(), "finished": None,
+              "status": "running", "total": 0, "counts": {}, "videos": []}
 
     v_list, s_list = scan_videos(cfg)
 
@@ -479,7 +495,8 @@ def main():
 
     if len(v_list) == 0:
         print("No videos found. Exiting")
-        return
+        write_report(cfg, dict(report, finished=now(), status="no videos"))
+        return 2
 
     if len(s_list) == 0:
         print("INFO: No external English subtitles detected.")
@@ -487,37 +504,28 @@ def main():
     else:
         print("INFO: subtitles list length: ", len(s_list))
         print("INFO: videos list length: ", len(v_list))
-        assert len(s_list) == len(v_list)
 
-    if len(v_list) == 1:
-        print("Detected single video. Treat it as a movie")
-        # TODO
-        if len(s_list) == 0:
-            convert_one(cfg, [0, 0, v_list[0], 0])
-        else:
-            assert len(s_list) == 1
-        return
-
-    # This is series
-    print("INFO: Looks like directory contains series.")
-    print("INFO: Trying to detect episodes")
-
-    # TODO: I do not know, how to create record in Python,
-    # so let it be an array per serie. Format as following:
-    # (<season>, <episode>, <video file path>, [<subtitles path>])
-    # this will be an array which function returns.
     e_list = analyze_episodes(cfg, v_list, s_list)
+    if cfg["test_mode"]:
+        print("INFO: Test mode, converting single video")
+        e_list = e_list[:1]
 
     print("INFO: List of found videos:")
     for e in e_list: print(e)
 
-    if cfg["test_mode"]:
-        print("INFO: Test mode, converting single video")
-        convert_one(cfg, e_list[0])
-    else:
-        print("INFO: Generic mode, converting whole list")
-        for e in e_list:
-            convert_one(cfg, e)
+    os.makedirs(cfg["out_dir"], exist_ok=True)
+    report["total"] = len(e_list)
+    for n, e in enumerate(e_list, 1):
+        print("INFO: video %d of %d: %s" % (n, len(e_list), e[2]))
+        report["videos"].append(convert_one(cfg, e))
+        write_report(cfg, report)
+
+    counts = {k: sum(1 for v in report["videos"] if v["status"] == k)
+              for k in ("converted", "exists", "skipped", "failed")}
+    ok = counts["skipped"] == 0 and counts["failed"] == 0
+    write_report(cfg, dict(report, finished=now(), status="done" if ok else "incomplete", counts=counts))
+    print("INFO: converted %(converted)d, there already %(exists)d, skipped %(skipped)d, failed %(failed)d" % counts)
+    return 0 if ok else 1
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
