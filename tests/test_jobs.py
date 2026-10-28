@@ -4,6 +4,8 @@ with a temp folder standing in for the share."""
 import json
 import os
 
+import pytest
+
 import enqueue
 import worker
 from ffmpegger import jobs
@@ -171,3 +173,36 @@ def test_season_through_the_queue(tmp_path):
     for ext in (".log", ".report.json"):
         assert os.path.exists(jobs.file(str(lib), "failed", job_id, ext))
     assert "OK: FFmpeg pass 2 finished" in open(jobs.file(str(lib), "failed", job_id, ".log")).read()
+
+
+def test_magic_packet():
+    import power
+    packet = power.magic_packet("bc:fc:e7:b5:d3:30")
+    assert len(packet) == 102 and packet[:6] == b"\xff" * 6 and packet[6:12] == bytes.fromhex("bcfce7b5d330")
+    assert power.magic_packet("BC-FC-E7-B5-D3-30") == packet
+    with pytest.raises(ValueError):
+        power.magic_packet("bc:fc:e7")
+
+
+def test_worker_heartbeat_and_power_commands(tmp_path, monkeypatch):
+    import power
+    lib = tmp_path / "lib"
+    jobs.ensure(str(lib))
+    offs = []
+    monkeypatch.setattr(worker, "power_off", lambda library, name, why: offs.append(why) or
+                        os.remove(jobs.control_file(library, name)))
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    [(name, beat, ago)] = power.statuses(str(lib))
+    assert name == "pc" and beat["state"] == "idle" and ago < 60
+
+    # off-when-idle waits for an empty queue; off goes at once
+    assert power.main(["--library", str(lib), "off-when-idle", "pc"]) == 0
+    put(lib, "1-gone", path="gone/x")
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    assert offs == ["the queue is empty"] and [i for i, _ in jobs.listing(str(lib), "failed")] == ["1-gone"]
+    assert power.main(["--library", str(lib), "off", "pc"]) == 0
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    assert offs[-1] == "asked to switch off"
+    assert power.main(["--library", str(lib), "off", "pc"]) == 0
+    assert power.main(["--library", str(lib), "cancel", "pc"]) == 0
+    assert not os.path.exists(jobs.control_file(str(lib), "pc"))

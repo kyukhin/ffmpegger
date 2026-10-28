@@ -3,7 +3,9 @@
 convert_eng.py on them, one at a time. Made for a desktop that
 is not always on: jobs wait in the queue while it is off, and a job cut by a
 shutdown goes back to the queue on the next start and resumes with the episodes
-not yet done. While a job runs, Windows is kept from sleeping.
+not yet done. While a job runs, Windows is kept from sleeping. The worker
+writes a heartbeat to .convert/workers/<name>.json and obeys power.py's commands
+in .convert/control/<name>.json: off, or off when the queue is empty.
 
     worker.py --library \\\\192.168.1.1\\lib          # Windows, started at logon by install-windows.ps1
     worker.py --library /Volumes/lib --once          # anywhere: empty the queue and exit
@@ -15,6 +17,7 @@ import contextlib
 import logging
 import logging.handlers
 import os
+import platform
 import socket
 import subprocess
 import sys
@@ -24,6 +27,8 @@ from ffmpegger import jobs
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 CONVERT = os.path.join(HERE, "ffmpegger", "convert_eng.py")
+CONTROL_EVERY = 20  # seconds between looks at the control file while converting
+STARTED = None  # set in main: when this worker started
 # The worker decides where a job reads and writes, not the job file
 FORBIDDEN = ("-d", "--directory", "-o", "--output", "-r", "--report")
 
@@ -96,6 +101,36 @@ def output_of(library, job, src):
     return local_path(library, rel), ["--keep_tree"]
 
 
+def heartbeat(library, name, state, job_id=None):
+    """When this worker was last seen and what it does, for power.py status and the bot."""
+    path = jobs.worker_file(library, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED,
+                      "pid": os.getpid(), "os": platform.platform()})
+
+
+def command(library, name):
+    """The action power.py left for this worker (off, off-when-idle), or None."""
+    try:
+        return jobs.read(jobs.control_file(library, name)).get("action")
+    except (OSError, ValueError):
+        return None
+
+
+def power_off(library, name, why):
+    """Takes the command away first, so the machine does not switch itself off again when it boots."""
+    try:
+        os.remove(jobs.control_file(library, name))
+    except OSError:
+        pass
+    log.info("switching off: %s", why)
+    if os.name == "nt":
+        # A minute to cancel with `shutdown /a`; a running conversion goes back to the queue on the next start
+        subprocess.call(["shutdown", "/s", "/t", "60", "/c", "ffmpegger: " + why], creationflags=0x08000000)
+    else:
+        subprocess.call(["sudo", "-n", "shutdown", "-h", "+1"])
+
+
 def requeue_own(library, name):
     """Jobs this machine was running when it went down go back to the queue."""
     for job_id, job in jobs.listing(library, "running"):
@@ -124,7 +159,7 @@ def summary(report_path):
                          for v in r.get("videos", []) if v["status"] in ("skipped", "failed")]}
 
 
-def run(library, job_id, job, priority="normal"):
+def run(library, job_id, job, priority="normal", name=None):
     src = local_path(library, job["path"])
     report = jobs.file(library, "running", job_id, ".report.json")
     bad = [a for a in job.get("args", []) if a.split("=")[0] in FORBIDDEN]
@@ -146,8 +181,23 @@ def run(library, job_id, job, priority="normal"):
             f.write("=== %s on %s: %s\n" % (jobs.now(), job.get("worker"), subprocess.list2cmdline(cmd)))
             f.flush()
             with keep_awake():
-                code = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                       env=dict(os.environ, PYTHONIOENCODING="utf-8:replace"), **priority_args(priority))
+                proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                        env=dict(os.environ, PYTHONIOENCODING="utf-8:replace"),
+                                        **priority_args(priority))
+                # Converting can take hours: keep the heartbeat going and an "off" obeyed meanwhile
+                while True:
+                    try:
+                        code = proc.wait(CONTROL_EVERY)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if name:
+                        try:
+                            heartbeat(library, name, "converting", job_id)
+                            if command(library, name) == "off":
+                                power_off(library, name, "asked to switch off while converting " + job["path"])
+                        except OSError:
+                            pass
         reason = "" if code == 0 else "convert_eng.py exit code %d" % code
         job["seconds"] = round(time.time() - started)
     job.update(finished=jobs.now(), exit=code, reason=reason, result=summary(report))
@@ -167,6 +217,8 @@ def main(argv=None):
     p.add_argument("--log", default=default_log())
     p.add_argument("--once", action="store_true", help="exit when the queue is empty")
     a = p.parse_args(argv)
+    global STARTED
+    STARTED = jobs.now()
     setup_logging(a.log)
     log.info("started as %s on %s, %s priority, python %s", a.name, a.library, a.priority, sys.version.split()[0])
 
@@ -176,10 +228,17 @@ def main(argv=None):
             if not requeued:
                 requeue_own(a.library, a.name)
                 requeued = True
+            heartbeat(a.library, a.name, "idle")
+            action = command(a.library, a.name)
+            if action == "off":
+                power_off(a.library, a.name, "asked to switch off")
             got = claim(a.library, a.name)
             if got:
-                run(a.library, *got, priority=a.priority)
+                heartbeat(a.library, a.name, "converting", got[0])
+                run(a.library, *got, priority=a.priority, name=a.name)
                 continue
+            if action == "off-when-idle":
+                power_off(a.library, a.name, "the queue is empty")
         except OSError as e:
             # The share is not there yet (just booted, network down): try again later,
             # and take back what was running here when it went away

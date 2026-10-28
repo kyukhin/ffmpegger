@@ -7,6 +7,8 @@ also over SMB:
     .convert/running/  taken by a worker; its .log and .report.json grow here
     .convert/done/     everything converted or there already
     .convert/failed/   something skipped or failed, see the .log and .report.json
+    .convert/workers/<name>.json  each worker's heartbeat: when it was last seen, what it does
+    .convert/control/<name>.json  a command for a worker from power.py: off, off-when-idle
 
 Paths inside a job are relative to the library root with / as the separator,
 so the server (/mnt/lib) and Windows (\\\\server\\lib) read them the same way."""
@@ -68,6 +70,14 @@ def listing(library, state):
         except (OSError, ValueError):
             pass  # renamed away meanwhile, or not ours
     return out
+
+
+def worker_file(library, name):
+    return os.path.join(library, QUEUE, "workers", name + ".json")
+
+
+def control_file(library, name):
+    return os.path.join(library, QUEUE, "control", name + ".json")
 
 
 def file(library, state, job_id, ext=".json"):
