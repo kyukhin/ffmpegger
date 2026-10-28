@@ -128,7 +128,8 @@ def auto(library, name, mac, interface=None, idle_off=10, wake_every=10, now=Non
                      if st["wake_tries"] == 1 else
                      ("stuck", "still off after %d wake packets, %d jobs waiting" % (st["wake_tries"], waiting)))
     if event:
-        st["events"] = (st.get("events", []) + [{"t": jobs.now(), "kind": event[0], "text": event[1]}])[-EVENTS_KEEP:]
+        st["events"] = (st.get("events", []) + [{"t": jobs.now(), "kind": event[0], "text": event[1],
+                                                 "waiting": waiting}])[-EVENTS_KEEP:]
     os.makedirs(os.path.dirname(path), exist_ok=True)
     jobs.write(path, st)
     return event

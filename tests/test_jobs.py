@@ -243,6 +243,7 @@ def test_power_auto(tmp_path, monkeypatch):
     assert run(22)[0] == "off"
     assert jobs.read(jobs.control_file(lib, "pc"))["action"] == "off"
     assert [e["kind"] for e in jobs.read(jobs.power_file(lib, "pc"))["events"]] == ["wake", "stuck", "off"]
+    assert [e["waiting"] for e in jobs.read(jobs.power_file(lib, "pc"))["events"]] == [1, 1, 0]
 
 
 def test_power_auto_leaves_people_alone(tmp_path, monkeypatch):
