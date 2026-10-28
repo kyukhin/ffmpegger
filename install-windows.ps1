@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
 Sets up the conversion worker on this Windows machine: Python and ffmpeg, the
-password for the library share, and a task that starts worker.py at logon.
+password for the library share, and a task that starts worker.py when Windows
+starts, before anyone logs in. Run it in PowerShell as administrator.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Library \\192.168.1.1\lib
@@ -12,13 +13,16 @@ powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Uninstall -Library
 .NOTES
 Run it again after moving the folder, to change the share or -Priority; it replaces the task.
 -Priority low lets games go first, but Windows then converts on the efficiency cores only.
-The password is typed into cmdkey and kept in Windows Credential Manager, never in a file.
+The share's password is typed into cmdkey and kept in Windows Credential Manager, never in a file.
+Starting before logon needs this account's Windows password once; Task Scheduler keeps it.
+-AtLogon starts the worker at logon instead and needs no password.
 See README.md.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Library,
     [string]$User = "kyukhin",
     [ValidateSet("normal", "low")][string]$Priority = "normal",
+    [switch]$AtLogon,
     [switch]$Uninstall
 )
 $ErrorActionPreference = "Stop"
@@ -85,16 +89,29 @@ if (-not (Test-Path $Library)) {
 }
 Write-Host "Library: $Library is reachable"
 
-# 3. The worker, started at logon and restarted if it dies
+# 3. The worker, restarted if it dies. By default it starts with Windows, so a machine woken by
+#    Wake-on-LAN converts and obeys "off" with nobody logged in; that runs it as this account with
+#    its password, which Task Scheduler keeps. -AtLogon: only while someone is logged in
 $action = New-ScheduledTaskAction -Execute $pythonw -WorkingDirectory $Repo `
     -Argument "`"$Repo\worker.py`" --library `"$Library`" --priority $Priority"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
     -MultipleInstances IgnoreNew
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -Principal $principal -Force | Out-Null
+# The old instance goes first: two workers of one name would take each other's jobs back
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($AtLogon) {
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
+        -Principal $principal -Force | Out-Null
+} else {
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = "PT30S"  # the network first
+    $cred = Get-Credential -UserName "$env:USERDOMAIN\$env:USERNAME" `
+        -Message "Windows password of $env:USERNAME, so the worker can start before anyone logs in"
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
+        -User $cred.UserName -Password $cred.GetNetworkCredential().Password -RunLevel Limited -Force | Out-Null
+}
 Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 3
 $log = Join-Path $env:LOCALAPPDATA "ffmpegger\worker.log"

@@ -137,9 +137,12 @@ profile whatever the folder.
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Library \\SERVER\lib
 ```
 
-It installs Python and ffmpeg with winget when missing, asks for the share's
-password once (kept in Credential Manager), and adds the task "ffmpegger
-worker" that starts at logon and restarts if it dies. The worker's log is
+Run it as administrator. It installs Python and ffmpeg with winget when missing,
+asks for the share's password once (kept in Credential Manager) and for this
+account's Windows password (kept by Task Scheduler), and adds the task
+"ffmpegger worker" that starts with Windows, before anyone logs in, and
+restarts if it dies. `-AtLogon` starts it at logon instead, without the Windows
+password. The worker's log is
 `%LOCALAPPDATA%\ffmpegger\worker.log`; each job's own log lies next to the job.
 `-Uninstall` removes the task and the password. `-Priority low` puts games and
 the desktop first; on a hybrid CPU (an i9 with P- and E-cores) Windows 11 then
@@ -147,6 +150,18 @@ converts on the efficiency cores only. In normal
 priority ffmpeg also opts out of Windows' power throttling (EcoQoS), which would
 otherwise keep a process without a window on the E-cores. After `git pull` nothing else is
 needed; the next job runs the new code.
+
+**Power.** `power.py` on the torrent server switches the desktop on and off:
+`power.py wake --mac <MAC> --interface eth0` sends a Wake-on-LAN packet;
+`power.py --library /mnt/lib off <name>` (or `off-when-idle`) leaves a command
+in `.convert/control/` that the worker carries out within a minute, also while
+it converts, with `shutdown /s /t 60` (cancel on the machine with `shutdown /a`);
+`status` lists the workers' heartbeats from `.convert/workers/`. Wake-on-LAN
+needs, on an ASUS board, Advanced → APM Configuration → Power On By PCI-E
+Enabled and ErP Ready Disabled; in Windows, the network card's Wake on Magic
+Packet and Enable PME, its "allow this device to wake the computer" and "only a
+magic packet", and Fast Startup off (`powercfg /h off`). The port's LED stays
+lit when the machine is off if the card listens.
 
 Any other machine works the same way: `worker.py --library /Volumes/lib`, or
 `--once` to empty the queue and exit.
