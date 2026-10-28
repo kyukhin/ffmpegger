@@ -272,3 +272,22 @@ def test_power_auto_leaves_people_alone(tmp_path, monkeypatch):
             beat(t0 + m * 60, users)
             assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff", now=t0 + m * 60) is None
     assert not os.path.exists(jobs.control_file(lib, "pc"))
+
+
+def test_power_is_on(monkeypatch):
+    import datetime
+    import power
+    now = datetime.datetime(2026, 10, 28, 12, 0).timestamp()
+    seen = datetime.datetime.fromtimestamp(now - 30).astimezone().isoformat(timespec="seconds")
+    monkeypatch.setattr(power, "answers", lambda ip: ip == "192.168.1.201")
+    assert power.is_on({"seen": seen, "state": "idle", "ip": "192.168.1.201"}, now)
+    assert not power.is_on({"seen": seen, "state": "idle", "ip": "192.168.1.202"}, now)  # switched off by hand
+    assert not power.is_on({"seen": seen, "state": "off", "ip": "192.168.1.201"}, now)   # shutting down
+    assert power.is_on({"seen": seen, "state": "idle"}, now)                              # no address: the beat
+    old = datetime.datetime.fromtimestamp(now - 600).astimezone().isoformat(timespec="seconds")
+    assert not power.is_on({"seen": old, "state": "idle", "ip": "192.168.1.201"}, now)
+
+
+def test_worker_address():
+    assert worker.address("/Volumes/lib") is None
+    assert worker.address("\\\\127.0.0.1\\lib") == "127.0.0.1"

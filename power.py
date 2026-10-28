@@ -18,6 +18,7 @@ import argparse
 import datetime
 import os
 import socket
+import subprocess
 import sys
 
 from ffmpegger import jobs
@@ -61,6 +62,21 @@ def statuses(library):
     return out
 
 
+def answers(ip):
+    """One ping, a second at most: whether the machine is there at all."""
+    try:
+        return subprocess.call(["ping", "-c1", "-W1", ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+    except OSError:
+        return True  # cannot tell: trust the heartbeat
+
+
+def is_on(beat, now):
+    """A fresh heartbeat, not saying it is shutting down, from a machine that answers a ping."""
+    if not beat or beat.get("state") == "off" or now - ts(beat["seen"]) >= ONLINE:
+        return False
+    return answers(beat["ip"]) if beat.get("ip") else True
+
+
 def ts(iso):
     return datetime.datetime.fromisoformat(iso).timestamp() if iso else None
 
@@ -81,7 +97,7 @@ def auto(library, name, mac, interface=None, idle_off=10, wake_every=10, now=Non
         beat = jobs.read(jobs.worker_file(library, name))
     except (OSError, ValueError):
         beat = None
-    online = bool(beat) and now - ts(beat["seen"]) < ONLINE
+    online = is_on(beat, now)
     waiting = len(jobs.listing(library, "queue"))
     mine = [i for i, j in jobs.listing(library, "running") if j.get("worker") == name]
     users = beat.get("users") if beat else None
@@ -149,8 +165,9 @@ def main(argv=None):
             print("%s: %s" % (a.name, event[1]))
         return 0
     if a.action == "status":
+        now = datetime.datetime.now().timestamp()
         for name, beat, ago in statuses(a.library):
-            state = ("on, " + beat["state"] + (" " + beat["job"] if beat.get("job") else "")) if ago < ONLINE \
+            state = ("on, " + beat["state"] + (" " + beat["job"] if beat.get("job") else "")) if is_on(beat, now) \
                 else "off or not running"
             print("%-12s %s, last seen %s (%d s ago)" % (name, state, beat["seen"], ago))
         return 0

@@ -140,12 +140,29 @@ def logged_in():
         return None
 
 
+def address(library):
+    """This machine's address towards the library's server: power.py pings it to tell a machine that was
+    switched off from one whose heartbeat is merely a minute old."""
+    host = library.replace("\\", "/").lstrip("/").split("/")[0] if library.startswith(("\\\\", "//")) else None
+    if not host:
+        return None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((host, 9))  # UDP: nothing is sent, the route picks the address
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
 def heartbeat(library, name, state, job_id=None):
-    """When this worker was last seen, what it does and who is logged in, for power.py and the bot."""
+    """When this worker was last seen, what it does, who is logged in and its address, for power.py and
+    the bot. state "off": it is shutting the machine down."""
     path = jobs.worker_file(library, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED,
-                      "users": logged_in(), "pid": os.getpid(), "os": platform.platform()})
+                      "users": logged_in(), "ip": address(library), "pid": os.getpid(), "os": platform.platform()})
 
 
 def command(library, name):
@@ -163,6 +180,10 @@ def power_off(library, name, why):
     except OSError:
         pass
     log.info("switching off: %s", why)
+    try:
+        heartbeat(library, name, "off")
+    except OSError:
+        pass
     if os.name == "nt":
         # A minute to cancel with `shutdown /a`; a running conversion goes back to the queue on the next start
         subprocess.call(["shutdown", "/s", "/t", "60", "/c", "ffmpegger: " + why], creationflags=0x08000000)
