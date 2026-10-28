@@ -47,7 +47,8 @@ function Find-Python {
     return $null
 }
 
-# 1. Python and ffmpeg
+# 1. Python and ffmpeg. PATH as of now, not as of when this window opened
+Update-Path
 $python = Find-Python
 if (-not $python) {
     Write-Host "Installing Python..."
@@ -71,7 +72,14 @@ Write-Host "ffmpeg: $((Get-Command ffmpeg).Source)"
 if (-not (Test-Path $Library)) {
     Write-Host "Password of $User for $Server (the Samba password):"
     cmdkey /add:$Server /user:$User /pass
-    if (-not (Test-Path $Library)) { throw "Cannot open $Library with that password" }
+    # Windows may keep the failed attempt from just before for a few seconds
+    $ok = $false
+    foreach ($i in 1..10) {
+        if (Test-Path $Library) { $ok = $true; break }
+        Start-Sleep -Seconds 2
+    }
+    # Not there still: let Windows say why (wrong password, another login to the server, ...)
+    if (-not $ok) { Get-ChildItem $Library -ErrorAction Stop | Out-Null }
 }
 Write-Host "Library: $Library is reachable"
 
