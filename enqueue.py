@@ -8,10 +8,12 @@ wrapper that passes --library; it can also be run by hand:
     enqueue.py --library /mnt/lib --profile bmw /mnt/lib/films/Rio.mkv
 
 It only writes a job file into the queue on the share; worker.py does the rest.
+Results go to 0conv/<profile>/ plus the source's path (see output_of).
 See README.md."""
 
 import argparse
 import os
+import posixpath
 import sys
 
 from ffmpegger import jobs
@@ -27,6 +29,20 @@ def match(profiles, rel):
         if (rel == f or rel.startswith(f + "/")) and (best is None or len(f) > len(profiles[best]["folder"])):
             best = name
     return best
+
+
+def output_of(cfg, profile, rel, is_dir):
+    """Where the results go, relative to the library: 0conv/<profile>/ plus the source's folder,
+    minus the profile folder or the downloads folder it was downloaded into:
+        0unsort/0web/Show.S01      -> 0conv/web/Show.S01
+        0unsort/0bmw/Rio.mkv       -> 0conv/bmw
+        series/Better Call Saul    -> 0conv/bmw/series/Better Call Saul"""
+    folder = rel if is_dir else posixpath.dirname(rel)
+    prefixes = [p["folder"].strip("/") for p in cfg["profiles"].values()] + [cfg.get("downloads", "").strip("/")]
+    inside = [p for p in prefixes if p and (folder == p or folder.startswith(p + "/"))]
+    if inside:
+        folder = folder[len(max(inside, key=len)):].strip("/")
+    return posixpath.join(cfg.get("output", "0conv"), profile, folder).rstrip("/")
 
 
 def log(library, line):
@@ -71,15 +87,16 @@ def main(argv=None):
         return 1
     for state in ("queue", "running"):
         for job_id, job in jobs.listing(library, state):
-            if job.get("path") == rel:
+            if job.get("path") == rel and job.get("profile") == name:
                 log(library, "already %s as %s: %s" % ("queued" if state == "queue" else "running", job_id, rel))
                 return 0
 
-    job_id = jobs.new_id(rel)
+    job_id = jobs.new_id(rel + "|" + name)  # one torrent can be queued for several profiles at once
     jobs.write(jobs.file(library, "queue", job_id), {
         "id": job_id,
         "path": rel,
         "profile": name,
+        "output": output_of(cfg, name, rel, os.path.isdir(path)),
         "args": cfg.get("common", []) + profiles[name]["args"],
         "queued": jobs.now(),
         "server": os.uname().nodename if hasattr(os, "uname") else "",

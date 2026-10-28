@@ -17,7 +17,7 @@ PROFILES = {"web": {"folder": "0unsort/0web", "args": ["-s", "50"]},
 def profiles_file(tmp_path):
     path = str(tmp_path / "profiles.json")
     with open(path, "w") as f:
-        json.dump({"common": ["-f"], "profiles": PROFILES}, f)
+        json.dump({"common": ["-f"], "output": "0conv", "downloads": "0unsort", "profiles": PROFILES}, f)
     return path
 
 
@@ -39,10 +39,14 @@ def test_enqueue(tmp_path, monkeypatch):
     assert enqueue.main(args) == 0
     [(job_id, job)] = jobs.listing(str(lib), "queue")
     assert job["path"] == "0unsort/0web/Show S01" and job["profile"] == "web"
+    assert job["output"] == "0conv/web/Show S01"
     assert job["args"] == ["-f", "-s", "50"]
 
     assert enqueue.main(args) == 0  # finished again: not queued twice
     assert len(jobs.listing(str(lib), "queue")) == 1
+    assert enqueue.main(args + ["--profile", "web-rus"]) == 0  # the same torrent for another profile is fine
+    assert len(jobs.listing(str(lib), "queue")) == 2
+    os.remove(jobs.file(str(lib), "queue", jobs.listing(str(lib), "queue")[1][0]))
 
     assert enqueue.main(args + [str(touch(lib / "films" / "Rio.mkv"))]) == 0  # no profile there
     assert enqueue.main(args + ["--profile", "web-rus", str(lib / "films" / "Rio.mkv")]) == 0
@@ -50,6 +54,17 @@ def test_enqueue(tmp_path, monkeypatch):
     assert enqueue.main(args + [str(tmp_path)]) == 1  # outside the library
     log = open(str(lib / ".convert" / "enqueue.log")).read()
     assert "no profile, not queued: films/Rio.mkv" in log and os.path.exists(show)
+
+
+def test_output_of():
+    cfg = {"output": "0conv", "downloads": "0unsort", "profiles": PROFILES}
+    assert enqueue.output_of(cfg, "web", "0unsort/0web/Show.S01", True) == "0conv/web/Show.S01"
+    assert enqueue.output_of(cfg, "web", "0unsort/0web/Rio.mkv", False) == "0conv/web"
+    assert enqueue.output_of(cfg, "web", "0unsort/0web/deep/Show", True) == "0conv/web/Show"
+    assert enqueue.output_of(cfg, "bmw", "0unsort/0web-rus/Show", True) == "0conv/bmw/Show"
+    assert enqueue.output_of(cfg, "web", "0unsort/Dragon 2.mkv", False) == "0conv/web"
+    assert enqueue.output_of(cfg, "bmw", "series/Better Call Saul", True) == "0conv/bmw/series/Better Call Saul"
+    assert enqueue.output_of(cfg, "bmw", "series/Better Call Saul/s03", True) == "0conv/bmw/series/Better Call Saul/s03"
 
 
 def worker_args(lib, tmp_path):
@@ -66,10 +81,12 @@ def test_worker_refuses(tmp_path):
     touch(lib / "0unsort" / "0web" / "x.mkv")
     put(lib, "1-gone", path="0unsort/0web/missing")
     put(lib, "2-paths", path="0unsort/0web/x.mkv", args=["-o", "/tmp"])
+    put(lib, "3-out", path="0unsort/0web/x.mkv", output="0conv/../../etc")
     assert worker.main(worker_args(lib, tmp_path)) == 0
     failed = dict(jobs.listing(str(lib), "failed"))
     assert failed["1-gone"]["reason"].startswith("the source is gone")
     assert failed["2-paths"]["reason"].startswith("the job sets paths itself")
+    assert "bad output folder" in failed["3-out"]["reason"]
 
 
 def test_worker_takes_back_its_own_interrupted_jobs(tmp_path):
@@ -95,14 +112,14 @@ def test_season_through_the_queue(tmp_path):
     assert worker.main(worker_args(lib, tmp_path)) == 0
     [(rus_id, rus_job)] = jobs.listing(str(lib), "done")
     assert rus_job["profile"] == "web-rus" and rus_job["exit"] == 0
-    assert os.path.exists(str(lib / "0unsort" / "0web-rus" / "0out" / "Rio.mp4"))
+    assert os.path.exists(str(lib / "0conv" / "web-rus" / "Rio.mp4"))
 
     # E02 has no English subtitles: the job fails, E01 is converted, the reason is in the job
     [(job_id, job)] = jobs.listing(str(lib), "failed")
     assert job["exit"] == 1 and job["worker"] == "pc"
     assert job["result"]["counts"]["converted"] == 1
     assert job["result"]["problems"][0]["video"] == "Show.S01E02.mkv"
-    assert os.listdir(str(season / "0out")) == ["Show.S01E01.mp4"]
+    assert os.listdir(str(lib / "0conv" / "web" / "Show (2001) S01")) == ["Show.S01E01.mp4"]
     for ext in (".log", ".report.json"):
         assert os.path.exists(jobs.file(str(lib), "failed", job_id, ext))
     assert "OK: FFmpeg pass 2 finished" in open(jobs.file(str(lib), "failed", job_id, ".log")).read()

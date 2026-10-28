@@ -1,6 +1,8 @@
 {
  "comment": "A torrent finished inside a profile's folder (relative to the library root) is queued with that profile; the deepest matching folder wins. args go to convert_eng.py as they are.",
  "common": ["-v", "-f"],
+ "output": "0conv",
+ "downloads": "0unsort",
  "profiles": {
   "web": {
    "folder": "0unsort/0web",

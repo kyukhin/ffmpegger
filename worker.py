@@ -82,6 +82,19 @@ def local_path(library, rel):
     return os.path.join(library, *rel.split("/"))
 
 
+def output_of(library, job, src):
+    """The results' folder and the extra converter arguments for it. A job names its folder, relative
+    to the library (0conv/...), and gets the source's subfolders there; one queued before jobs named
+    it gets 0out next to the source."""
+    rel = job.get("output")
+    if rel is None:
+        return (os.path.join(src, "0out") if os.path.isdir(src) else os.path.join(os.path.dirname(src), "0out")), []
+    parts = rel.split("/")
+    if rel.startswith("/") or any(p in ("", ".", "..") for p in parts) or parts[0] == jobs.QUEUE:
+        raise ValueError("bad output folder in the job: " + rel)
+    return local_path(library, rel), ["--keep_tree"]
+
+
 def requeue_own(library, name):
     """Jobs this machine was running when it went down go back to the queue."""
     for job_id, job in jobs.listing(library, "running"):
@@ -112,15 +125,18 @@ def summary(report_path):
 
 def run(library, job_id, job):
     src = local_path(library, job["path"])
-    out = os.path.join(src, "0out") if os.path.isdir(src) else os.path.join(os.path.dirname(src), "0out")
     report = jobs.file(library, "running", job_id, ".report.json")
     bad = [a for a in job.get("args", []) if a.split("=")[0] in FORBIDDEN]
+    try:
+        out, extra = output_of(library, job, src)
+    except ValueError as e:
+        out, extra, bad = None, [], [str(e)]
     if not os.path.exists(src):
         code, reason = None, "the source is gone: " + job["path"]
     elif bad:
         code, reason = None, "the job sets paths itself: " + " ".join(bad)
     else:
-        cmd = [python(), CONVERT, "-d", src, "-o", out, "-r", report] + job.get("args", [])
+        cmd = [python(), CONVERT, "-d", src, "-o", out, "-r", report] + extra + job.get("args", [])
         log.info("converting %s %s (%s)", job_id, job["path"], job.get("profile"))
         started = time.time()
         with open(jobs.file(library, "running", job_id, ".log"), "a", encoding="utf-8") as f:
