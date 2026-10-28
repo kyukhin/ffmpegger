@@ -151,8 +151,21 @@ password. The worker's log is
 the desktop first; on a hybrid CPU (an i9 with P- and E-cores) Windows 11 then
 converts on the efficiency cores only. In normal
 priority ffmpeg also opts out of Windows' power throttling (EcoQoS), which would
-otherwise keep a process without a window on the E-cores. After `git pull` nothing else is
-needed; the next job runs the new code.
+otherwise keep a process without a window on the E-cores.
+
+**Updates and restarts.** The desktop keeps itself current: before each job the
+worker does `git pull --ff-only` of its checkout, and when the code changed it
+starts again on it before taking the job, so a job queued by a newer torrent
+server never meets an older converter. For that the task runs a small
+supervisor (`worker.py` itself) that runs the worker as its child: it starts
+the worker again at once after an update, and a minute later (after another
+pull) when it dies. On Windows the worker, the converter and ffmpeg are in a
+job object that dies with the supervisor, so stopping the task stops the
+conversion too. Its own log is `worker-supervisor.log`; the heartbeat says
+which commit the worker runs. A change to the supervisor itself takes a
+restart of the task or the machine. After a reboot or a power cut the worker
+starts with Windows, takes back the job it was running and goes on with the
+episodes not yet done; the one cut in the middle is converted again.
 
 **Power.** `power.py` on the torrent server switches the desktop on and off:
 `power.py wake --mac <MAC> --interface eth0` sends a Wake-on-LAN packet;

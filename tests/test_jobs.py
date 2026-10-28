@@ -292,3 +292,62 @@ def test_power_is_on(monkeypatch):
 def test_worker_address():
     assert worker.address("/Volumes/lib") is None
     assert worker.address("\\\\127.0.0.1\\lib") == "127.0.0.1"
+
+
+def test_update_pulls_the_checkout(tmp_path, monkeypatch):
+    import subprocess
+
+    def sh(cwd, *args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=str(cwd), check=True,
+                       capture_output=True)
+
+    origin, clone = tmp_path / "origin", tmp_path / "clone"
+    origin.mkdir()
+    sh(origin, "init", "-q", "-b", "master")
+    touch(origin / "a.py")
+    sh(origin, "add", "a.py")
+    sh(origin, "commit", "-q", "-m", "one")
+    sh(tmp_path, "clone", "-q", str(origin), str(clone))
+    monkeypatch.setattr(worker, "HERE", str(clone))
+    assert worker.update() is False
+    touch(origin / "b.py")
+    sh(origin, "add", "b.py")
+    sh(origin, "commit", "-q", "-m", "two")
+    assert worker.update() is True and os.path.exists(str(clone / "b.py"))
+    assert worker.version() == subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(origin),
+                                              capture_output=True, text=True).stdout.strip()
+    monkeypatch.setattr(worker, "HERE", str(tmp_path / "not-a-checkout"))
+    assert worker.update() is False
+
+
+def test_worker_restarts_for_new_code_before_a_job(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    put(lib, "1-job", path="x")
+    monkeypatch.setattr(worker, "update", lambda: True)
+    args = [a for a in worker_args(lib, tmp_path) if a != "--once"] + ["--child"]
+    assert worker.main(args) == worker.RESTART
+    assert [i for i, _ in jobs.listing(str(lib), "queue")] == ["1-job"]  # left for the new code
+
+
+def test_supervisor_starts_the_worker_again(monkeypatch):
+    codes, started, slept, updates = [worker.RESTART, 1], [], [], []
+
+    class Child:
+        _handle = 0
+
+        def __init__(self, cmd, **kw):
+            if not codes:
+                raise KeyboardInterrupt  # enough
+            started.append(cmd)
+            self.code = codes.pop(0)
+
+        def wait(self):
+            return self.code
+
+    monkeypatch.setattr(worker.subprocess, "Popen", Child)
+    monkeypatch.setattr(worker.time, "sleep", slept.append)
+    monkeypatch.setattr(worker, "update", lambda: updates.append(1))
+    with pytest.raises(KeyboardInterrupt):
+        worker.supervise(["--library", "L"])
+    assert len(started) == 2 and started[0][-3:] == ["--child", "--library", "L"]
+    assert slept == [60] and updates == [1]  # at once after an update, after a minute and a pull when it died

@@ -7,7 +7,12 @@ not yet done. While a job runs, Windows is kept from sleeping. The worker
 writes a heartbeat to .convert/workers/<name>.json and obeys power.py's commands
 in .convert/control/<name>.json: off, or off when the queue is empty.
 
-    worker.py --library \\\\192.168.1.1\\lib          # Windows, started at logon by install-windows.ps1
+Started without --once it keeps itself current: before taking a job it does a
+git pull of its checkout, and when the code changed it starts again on the new
+code, so a job queued by a newer torrent server never meets an older converter.
+It runs as a child of itself for that, see supervise.
+
+    worker.py --library \\\\192.168.1.1\\lib          # Windows, started at boot by install-windows.ps1
     worker.py --library /Volumes/lib --once          # anywhere: empty the queue and exit
 
 See README.md."""
@@ -18,6 +23,7 @@ import logging
 import logging.handlers
 import os
 import platform
+import shutil
 import socket
 import subprocess
 import sys
@@ -28,7 +34,9 @@ from ffmpegger import jobs
 HERE = os.path.dirname(os.path.realpath(__file__))
 CONVERT = os.path.join(HERE, "ffmpegger", "convert_eng.py")
 CONTROL_EVERY = 20  # seconds between looks at the control file while converting
+RESTART = 3  # the worker's exit code after a code update: the supervisor starts it again at once
 STARTED = None  # set in main: when this worker started
+CODE = None  # set in main: the commit it runs
 # The worker decides where a job reads and writes, not the job file
 FORBIDDEN = ("-d", "--directory", "-o", "--output", "-r", "--report")
 
@@ -156,12 +164,126 @@ def address(library):
         s.close()
 
 
+def git(*args):
+    exe = shutil.which("git") or (r"C:\Program Files\Git\cmd\git.exe" if os.name == "nt" else "git")
+    # Nobody to answer a password prompt, even less in session 0 before logon: fail instead
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
+    return subprocess.run([exe] + list(args), cwd=HERE, capture_output=True, text=True, timeout=120, env=env,
+                          stdin=subprocess.DEVNULL, **({"creationflags": 0x08000000} if os.name == "nt" else {}))
+
+
+def version():
+    """The commit this checkout is at, short; None when it is not a git checkout or git is missing."""
+    try:
+        r = git("rev-parse", "--short", "HEAD")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (r.stdout.strip() or None) if r.returncode == 0 else None
+
+
+def update():
+    """git pull --ff-only of this checkout: True when the code changed. Without git or the network, or
+    with local changes in the way, it says so in the log and the job runs on the code there is."""
+    if not os.path.isdir(os.path.join(HERE, ".git")):
+        return False
+    try:
+        before = git("rev-parse", "HEAD").stdout.strip()
+        r = git("pull", "--ff-only", "--quiet")
+        after = git("rev-parse", "HEAD").stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        log.info("cannot update the code: %s", e)
+        return False
+    if r.returncode:
+        log.info("cannot update the code: %s", (r.stderr or r.stdout).strip()[-300:])
+    if before != after:
+        log.info("code updated from %s to %s", before[:7], after[:7])
+    return before != after
+
+
+def kernel32():
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateJobObjectW.restype = wintypes.HANDLE
+    k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k
+
+
+def kill_on_close(proc):
+    """A Windows job object holding proc and everything it starts, all killed when the job's handle is
+    closed: by release(), or by Windows when this process ends, however it ends. None elsewhere, or
+    when Windows refuses (then nothing is killed, as before)."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class Basic(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class Extended(ctypes.Structure):
+        _fields_ = [("Basic", Basic), ("IoInfo", ctypes.c_uint64 * 6), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    try:
+        k = kernel32()
+        job = k.CreateJobObjectW(None, None)
+        if not job:
+            raise OSError(ctypes.get_last_error(), "CreateJobObject")
+        info = Extended()
+        info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        # 9: JobObjectExtendedLimitInformation
+        if not (k.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+                and k.AssignProcessToJobObject(job, int(proc._handle))):
+            err = ctypes.get_last_error()
+            k.CloseHandle(job)
+            raise OSError(err, "job object")
+        return job
+    except Exception as e:  # never let this stop the worker
+        log.info("the worker's processes are not tied to the supervisor: %s", e)
+        return None
+
+
+def release(job):
+    if job:
+        kernel32().CloseHandle(job)
+
+
+def supervise(argv):
+    """What the scheduled task runs: the worker itself as a child process, started again at once when it
+    exits for new code and a minute later when it dies. On Windows each child is in a job object (see
+    kill_on_close): a converter left by a worker that died is killed before the next one takes the job
+    back, and stopping the task stops the conversion too. The supervisor itself is only replaced by a
+    restart of the task or of the machine."""
+    log.info("supervisor started, the worker runs as its child")
+    while True:
+        child = subprocess.Popen([sys.executable, os.path.realpath(__file__), "--child"] + argv,
+                                 stdin=subprocess.DEVNULL)
+        job = kill_on_close(child)
+        code = child.wait()
+        release(job)
+        if code == RESTART:
+            log.info("starting the worker again on the new code")
+            continue
+        log.info("the worker exited with code %s, starting it again in a minute", code)
+        time.sleep(60)
+        update()  # a fix pushed for what killed it
+
+
 def heartbeat(library, name, state, job_id=None):
     """When this worker was last seen, what it does, who is logged in and its address, for power.py and
     the bot. state "off": it is shutting the machine down."""
     path = jobs.worker_file(library, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED,
+    jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED, "code": CODE,
                       "users": logged_in(), "ip": address(library), "pid": os.getpid(), "os": platform.platform()})
 
 
@@ -275,12 +397,18 @@ def main(argv=None):
                    help="low: games first, but on a hybrid CPU only the efficiency cores convert")
     p.add_argument("--name", default=socket.gethostname(), help="this worker's name in the jobs")
     p.add_argument("--log", default=default_log())
-    p.add_argument("--once", action="store_true", help="exit when the queue is empty")
+    p.add_argument("--once", action="store_true", help="exit when the queue is empty, without updating the code")
+    p.add_argument("--child", action="store_true", help=argparse.SUPPRESS)  # run by supervise
     a = p.parse_args(argv)
-    global STARTED
-    STARTED = jobs.now()
+    global STARTED, CODE
+    STARTED, CODE = jobs.now(), version()
+    if not (a.once or a.child):
+        # A log of its own: two processes rotating one file fail on Windows
+        setup_logging(os.path.splitext(a.log)[0] + "-supervisor.log")
+        return supervise(sys.argv[1:] if argv is None else argv)
     setup_logging(a.log)
-    log.info("started as %s on %s, %s priority, python %s", a.name, a.library, a.priority, sys.version.split()[0])
+    log.info("started as %s on %s, %s priority, python %s, code %s",
+             a.name, a.library, a.priority, sys.version.split()[0], CODE)
 
     requeued = False
     while True:
@@ -292,6 +420,9 @@ def main(argv=None):
             action = command(a.library, a.name)
             if action == "off":
                 power_off(a.library, a.name, "asked to switch off")
+            # The job was queued with the torrent server's code: take it on the newest code there is
+            if a.child and jobs.listing(a.library, "queue") and update():
+                return RESTART
             got = claim(a.library, a.name)
             if got:
                 heartbeat(a.library, a.name, "converting", got[0])
