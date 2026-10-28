@@ -103,7 +103,7 @@ def parse_args():
     cfg["a_stream"] = args.astream
     if args.directory: cfg["root_dir"] = args.directory
     cfg["fixup_names"] = args.fixup_names
-    cfg["audio_enforce"] = args.audio_enforce
+    if args.audio_enforce is not None: cfg["audio_enforce"] = args.audio_enforce
     if args.output: cfg["out_dir"] = args.output
     cfg["verbose"] = args.verbose
     if args.settings_video: cfg["settings_video"] = args.settings_video

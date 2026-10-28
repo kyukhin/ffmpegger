@@ -42,64 +42,55 @@ fi
 
 ROOT_DIR="${1}"
 
-if [ -f "${ROOT_DIR}" ]; then
-    L=("${ROOT_DIR}")
-else
-    if [ -d "${ROOT_DIR}" ]; then
-	for f in "$ROOT_DIR"/*; do
-	    L+=("${f}")
-	done
-    fi
+# Rsync the entire directory/file at once to preserve structure
+# (needed for external subtitles in subdirectories like Sub.Eng/)
+echo "rsync -e \"${SSH_CMD}\" --info=name -a --copy-links \"${ROOT_DIR}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
+rsync -e "${SSH_CMD}" --info=name -a --copy-links "${ROOT_DIR}" ${SSH_HOST}:${VM_DIR_IN}
+if [ $? -ne 0 ]; then
+    echo "ERR: syncing to VM. Exit."
+    ${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+    echo "Unlocked."
+    exit 1
 fi
 
-echo "Top dir listing"
-for f in "${L[@]}"; do
-    echo "${f}"
-done
+# Get the basename to construct the remote path
+BASENAME=$(basename "${ROOT_DIR}")
+REMOTE_IN="${VM_DIR_IN}/${BASENAME}"
+if [ -f "${ROOT_DIR}" ]; then
+    REMOTE_IN="${VM_DIR_IN}"
+fi
 
-for f in "${L[@]}"; do
-    echo "rsync -e \"${SSH_CMD}\" --info=name -a --copy-links \"${f}\" ${VM_USER}@${VM_HOST}:${VM_DIR_IN}"
-    rsync -e "${SSH_CMD}" --info=name -a --copy-links "${f}" ${SSH_HOST}:${VM_DIR_IN}
-    if [ $? -ne 0 ]; then
-	echo "ERR: syncing to VM. Exit."
-	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
-	echo "Unlocked."
-	exit 1
-    fi
+echo "${SSH_CMD} ${SSH_HOST} \"${VM_COMMAND} -v -f -d '${REMOTE_IN}' -o '${VM_DIR_OUT}' -y ${ARGS}\""
+${SSH_CMD} ${SSH_HOST} "${VM_COMMAND} -v -f -d '${REMOTE_IN}' -o '${VM_DIR_OUT}' -y ${ARGS}"
+if [ $? -ne 0 ]; then
+    echo "ERR: performing conversion. Exit."
+    ${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+    echo "Unlocked."
+    exit 1
+fi
 
-    echo "${SSH_CMD} ${SSH_HOST} \"${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}\""
-    ${SSH_CMD} ${SSH_HOST} "${VM_COMMAND} -v -f -d ${VM_DIR_IN} -o ${VM_DIR_OUT} -y ${ARGS}"
-    if [ $? -ne 0 ]; then
-	echo "ERR: performing conversion. Exit."
-	# TODO: cleanup remote
-	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
-	echo "Unlocked."
-	exit 1
-    fi
+OUT="${ROOT_DIR}"
+if [ -f "${OUT}" ] ; then
+    OUT=$(dirname "$(realpath "${OUT}")")
+fi
 
-    OUT=${f}
-    if [ -f "${OUT}" ] ; then
-	OUT=`dirname "$(realpath "${OUT}")"`
-    fi
+echo "rsync -e \"${SSH_CMD}\" --info=name -a ${SSH_HOST}:${VM_DIR_OUT} \"${OUT}\""
+rsync -e "${SSH_CMD}" -O --info=name -a ${SSH_HOST}:${VM_DIR_OUT} "${OUT}"
+if [ $? -ne 0 ]; then
+    echo "ERR: syncing from VM. Exit."
+    ${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+    echo "Unlocked."
+    exit 1
+fi
 
-    echo "rsync -e \"${SSH_CMD}\" --info=name -a ${SSH_HOST}:${VM_DIR_OUT} \"${OUT}\""
-    rsync -e "${SSH_CMD}" -O --info=name -a ${SSH_HOST}:${VM_DIR_OUT} "${OUT}"
-    if [ $? -ne 0 ]; then
-	echo "ERR: syncing from VM. Exit."
-	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
-	echo "Unlocked."
-	exit 1
-    fi
-
-    echo "${SSH_CMD} ${SSH_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
-    ${SSH_CMD} ${SSH_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
-    if [ $? -ne 0 ]; then
-	echo "ERR: cleanup remote dirs. Exit."
-	${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
-	echo "Unlocked."
-	exit 1
-    fi
-done
+echo "${SSH_CMD} ${SSH_HOST} \"rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*\""
+${SSH_CMD} ${SSH_HOST} "rm -rf ${VM_DIR_IN}/* ${VM_DIR_OUT}/*"
+if [ $? -ne 0 ]; then
+    echo "ERR: cleanup remote dirs. Exit."
+    ${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
+    echo "Unlocked."
+    exit 1
+fi
 
 ${SSH_CMD} ${SSH_HOST} "rm ${LOCK_FILE_PATH}"
 echo "Unlocked."
