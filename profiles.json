@@ -1,0 +1,26 @@
+{
+ "comment": "A torrent finished inside a profile's folder (relative to the library root) is queued with that profile; the deepest matching folder wins. args go to convert_eng.py as they are.",
+ "common": ["-v", "-f"],
+ "profiles": {
+  "web": {
+   "folder": "0unsort/0web",
+   "about": "English audio, English subtitles burnt in",
+   "args": ["--size_target=1600", "--settings_subtitles=force_style='Fontsize=40'"]
+  },
+  "web-rus": {
+   "folder": "0unsort/0web-rus",
+   "about": "Russian audio, no subtitles",
+   "args": ["--size_target=1600", "--subtitles_disabled", "--audio_lang=rus"]
+  },
+  "bmw": {
+   "folder": "0unsort/0bmw",
+   "about": "as web, cropped and scaled to the car's 1920x700 screen",
+   "args": ["--size_target=1600", "--video_fit=1920x700", "--settings_subtitles=force_style='Fontsize=40'"]
+  },
+  "ipad-rus": {
+   "folder": "0unsort/0ipad-rus",
+   "about": "Russian audio, no subtitles, small",
+   "args": ["--size_target=800", "--subtitles_disabled", "--audio_lang=rus"]
+  }
+ }
+}
