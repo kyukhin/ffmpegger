@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Takes conversion jobs from the queue on the library share and runs
-convert_eng.py on them, one at a time, at low priority. Made for a desktop that
+convert_eng.py on them, one at a time. Made for a desktop that
 is not always on: jobs wait in the queue while it is off, and a job cut by a
 shutdown goes back to the queue on the next start and resumes with the episodes
 not yet done. While a job runs, Windows is kept from sleeping.
@@ -59,13 +59,14 @@ def keep_awake():
         ctypes.windll.kernel32.SetThreadExecutionState(es_continuous)
 
 
-def low_priority():
-    """Popen arguments: below normal priority, no console window on Windows.
-    ffmpeg started by convert_eng.py inherits both."""
+def priority_args(priority):
+    """Popen arguments. normal: full speed on every core. low: below normal priority, so games and
+    the desktop come first, but then Windows 11 keeps the conversion on the efficiency cores.
+    No console window on Windows. ffmpeg started by convert_eng.py inherits the priority."""
     if os.name == "nt":
-        below_normal, no_window = 0x00004000, 0x08000000
-        return {"creationflags": below_normal | no_window}
-    return {"preexec_fn": lambda: os.nice(10)}
+        no_window, below_normal = 0x08000000, 0x00004000
+        return {"creationflags": no_window | (below_normal if priority == "low" else 0)}
+    return {"preexec_fn": lambda: os.nice(10)} if priority == "low" else {}
 
 
 def python():
@@ -123,7 +124,7 @@ def summary(report_path):
                          for v in r.get("videos", []) if v["status"] in ("skipped", "failed")]}
 
 
-def run(library, job_id, job):
+def run(library, job_id, job, priority="normal"):
     src = local_path(library, job["path"])
     report = jobs.file(library, "running", job_id, ".report.json")
     bad = [a for a in job.get("args", []) if a.split("=")[0] in FORBIDDEN]
@@ -144,7 +145,7 @@ def run(library, job_id, job):
             f.flush()
             with keep_awake():
                 code = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                       env=dict(os.environ, PYTHONIOENCODING="utf-8:replace"), **low_priority())
+                                       env=dict(os.environ, PYTHONIOENCODING="utf-8:replace"), **priority_args(priority))
         reason = "" if code == 0 else "convert_eng.py exit code %d" % code
         job["seconds"] = round(time.time() - started)
     job.update(finished=jobs.now(), exit=code, reason=reason, result=summary(report))
@@ -158,12 +159,14 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Convert jobs from the queue on the library share.")
     p.add_argument("--library", required=True, help="the library share as this machine sees it")
     p.add_argument("--poll", type=int, default=60, help="seconds between looks at an empty queue")
+    p.add_argument("--priority", choices=("normal", "low"), default="normal",
+                   help="low: games first, but on a hybrid CPU only the efficiency cores convert")
     p.add_argument("--name", default=socket.gethostname(), help="this worker's name in the jobs")
     p.add_argument("--log", default=default_log())
     p.add_argument("--once", action="store_true", help="exit when the queue is empty")
     a = p.parse_args(argv)
     setup_logging(a.log)
-    log.info("started as %s on %s, python %s", a.name, a.library, sys.version.split()[0])
+    log.info("started as %s on %s, %s priority, python %s", a.name, a.library, a.priority, sys.version.split()[0])
 
     requeued = False
     while True:
@@ -173,7 +176,7 @@ def main(argv=None):
                 requeued = True
             got = claim(a.library, a.name)
             if got:
-                run(a.library, *got)
+                run(a.library, *got, priority=a.priority)
                 continue
         except OSError as e:
             # The share is not there yet (just booted, network down): try again later,

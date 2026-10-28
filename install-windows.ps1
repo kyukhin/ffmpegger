@@ -10,13 +10,15 @@ powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Library \\192.168.
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Uninstall -Library \\192.168.1.1\lib
 
 .NOTES
-Run it again after moving the folder or to change the share; it replaces the task.
+Run it again after moving the folder, to change the share or -Priority; it replaces the task.
+-Priority low lets games go first, but Windows then converts on the efficiency cores only.
 The password is typed into cmdkey and kept in Windows Credential Manager, never in a file.
 See README.md.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Library,
     [string]$User = "kyukhin",
+    [ValidateSet("normal", "low")][string]$Priority = "normal",
     [switch]$Uninstall
 )
 $ErrorActionPreference = "Stop"
@@ -85,7 +87,7 @@ Write-Host "Library: $Library is reachable"
 
 # 3. The worker, started at logon and restarted if it dies
 $action = New-ScheduledTaskAction -Execute $pythonw -WorkingDirectory $Repo `
-    -Argument "`"$Repo\worker.py`" --library `"$Library`""
+    -Argument "`"$Repo\worker.py`" --library `"$Library`" --priority $Priority"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `

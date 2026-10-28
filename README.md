@@ -83,8 +83,8 @@ the exit code and a summary with every skipped or failed episode and the
 reason. To run a failed job again after fixing it, move its `.json` back to
 `queue/` (or queue the folder again with `enqueue.py`).
 
-The worker converts one job at a time at below-normal priority, keeps Windows
-from sleeping while a job runs, and on start returns its own unfinished jobs to
+The worker converts one job at a time on every core, keeps Windows from
+sleeping while a job runs, and on start returns its own unfinished jobs to
 the queue: a shutdown in the middle of a season costs only the episode that was
 running.
 
@@ -112,7 +112,11 @@ It installs Python and ffmpeg with winget when missing, asks for the share's
 password once (kept in Credential Manager), and adds the task "ffmpegger
 worker" that starts at logon and restarts if it dies. The worker's log is
 `%LOCALAPPDATA%\ffmpegger\worker.log`; each job's own log lies next to the job.
-`-Uninstall` removes the task and the password. After `git pull` nothing else is
+`-Uninstall` removes the task and the password. `-Priority low` puts games and
+the desktop first; on a hybrid CPU (an i9 with P- and E-cores) Windows 11 then
+converts on the efficiency cores only. In normal
+priority ffmpeg also opts out of Windows' power throttling (EcoQoS), which would
+otherwise keep a process without a window on the E-cores. After `git pull` nothing else is
 needed; the next job runs the new code.
 
 Any other machine works the same way: `worker.py --library /Volumes/lib`, or

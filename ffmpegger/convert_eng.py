@@ -355,19 +355,39 @@ def video_filters(cfg, width, height):
     print("INFO: video track conversion command is", crop + "," + scale)
     return [crop, scale]
 
+def full_speed(proc):
+    """Windows 11 throttles a process that has no window (EcoQoS) and keeps it on the efficiency
+    cores of a hybrid CPU: an i9 then converts on its E-cores with the P-cores idle. Opt out."""
+    if os.name != "nt":
+        return
+    import ctypes
+
+    class PowerThrottlingState(ctypes.Structure):
+        _fields_ = [("Version", ctypes.c_ulong), ("ControlMask", ctypes.c_ulong), ("StateMask", ctypes.c_ulong)]
+
+    process_power_throttling, execution_speed = 4, 1
+    state = PowerThrottlingState(1, execution_speed, 0)  # control execution speed, throttling off
+    # Popen keeps the process handle in _handle on Windows
+    ctypes.windll.kernel32.SetProcessInformation(ctypes.c_void_p(int(proc._handle)), process_power_throttling,
+                                                 ctypes.byref(state), ctypes.sizeof(state))
+
 def run_ffmpeg(cmd):
     """None on success, otherwise the end of ffmpeg's error output.
     In a terminal ffmpeg shows its progress; under a worker its output is kept
     and printed only if it fails."""
     print(cmd)
     if sys.stdout.isatty():
-        return None if subprocess.run(cmd).returncode == 0 else "see the output above"
-    res = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace")
-    if res.returncode == 0:
+        proc = subprocess.Popen(cmd)
+        full_speed(proc)
+        return None if proc.wait() == 0 else "see the output above"
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
+    full_speed(proc)
+    _, err = proc.communicate()
+    if proc.returncode == 0:
         return None
-    tail = res.stderr.strip().splitlines()[-20:]
+    tail = err.strip().splitlines()[-20:]
     print("\n".join(tail))
-    return tail[-1] if tail else "exit code %d" % res.returncode
+    return tail[-1] if tail else "exit code %d" % proc.returncode
 
 def convert_one(cfg, e):
     """Converts one video. Returns its report entry: status converted,
