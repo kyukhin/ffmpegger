@@ -67,6 +67,54 @@ def test_output_of():
     assert enqueue.output_of(cfg, "bmw", "series/Better Call Saul/s03", True) == "0conv/bmw/series/Better Call Saul/s03"
 
 
+def test_parse_labels():
+    assert enqueue.parse_labels("show:Better Call Saul, convert:bmw,convert:web,kids") == \
+        {"show": "Better Call Saul", "film": None, "convert": ["bmw", "web"]}
+    assert enqueue.parse_labels("film,convert:web+bmw")["film"] is True
+    assert enqueue.parse_labels("film:Rio (2011)")["film"] == "Rio (2011)"
+    assert enqueue.parse_labels(None) == {"show": None, "film": None, "convert": []}
+
+
+def test_labels(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    args = ["--library", str(lib), "--profiles", profiles_file(tmp_path)]
+    pack = lib / "0unsort" / "Show.S01-S02"
+    touch(pack / "Show.S01E01.mkv")
+    touch(pack / "Show.S02E01.mkv")
+    monkeypatch.setenv("TR_TORRENT_DIR", str(lib / "0unsort"))
+    monkeypatch.setenv("TR_TORRENT_NAME", "Show.S01-S02")
+    monkeypatch.setenv("TR_TORRENT_LABELS", "show:Show,convert:web")
+    assert enqueue.main(args) == 0
+    assert os.path.exists(str(lib / "series" / "Show" / "s02" / "Show.S02E01.mkv"))
+    assert [(j["path"], j["output"]) for _, j in jobs.listing(str(lib), "queue")] == [
+        ("series/Show/s01", "0conv/web/series/Show/s01"), ("series/Show/s02", "0conv/web/series/Show/s02")]
+    assert len(os.listdir(str(lib / ".convert" / "arranged"))) == 1
+
+    # Two profiles, no arranging: the torrent itself, once per profile; an unknown profile is said
+    movie = touch(lib / "0unsort" / "Rio.2011.mkv")
+    monkeypatch.setenv("TR_TORRENT_NAME", "Rio.2011.mkv")
+    monkeypatch.setenv("TR_TORRENT_LABELS", "convert:web,convert:web-rus,convert:nope")
+    assert enqueue.main(args) == 1
+    rio = [(j["profile"], j["output"]) for _, j in jobs.listing(str(lib), "queue") if j["path"] == "0unsort/Rio.2011.mkv"]
+    assert sorted(rio) == [("web", "0conv/web"), ("web-rus", "0conv/web-rus")]
+    assert "no profile nope" in open(str(lib / ".convert" / "enqueue.log")).read()
+
+    # A film with its own title, arranged and converted
+    monkeypatch.setenv("TR_TORRENT_LABELS", "film:Rio (2011),convert:web")
+    assert enqueue.main(args) == 0
+    assert os.path.exists(str(lib / "films" / "Rio (2011)" / "Rio.2011.mkv")) and os.path.exists(movie)
+    assert ("films/Rio (2011)", "0conv/web/films/Rio (2011)") in [(j["path"], j["output"])
+                                                                   for _, j in jobs.listing(str(lib), "queue")]
+
+    # A label that is not ours: the profile folder decides, as before
+    touch(lib / "0unsort" / "0web" / "Kids" / "Kids.S01E01.mkv")
+    monkeypatch.setenv("TR_TORRENT_DIR", str(lib / "0unsort" / "0web"))
+    monkeypatch.setenv("TR_TORRENT_NAME", "Kids")
+    monkeypatch.setenv("TR_TORRENT_LABELS", "kids")
+    assert enqueue.main(args) == 0
+    assert ("0unsort/0web/Kids", "web") in [(j["path"], j["profile"]) for _, j in jobs.listing(str(lib), "queue")]
+
+
 def worker_args(lib, tmp_path):
     return ["--library", str(lib), "--once", "--name", "pc", "--log", str(tmp_path / "worker.log")]
 

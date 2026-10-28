@@ -2,12 +2,13 @@
 
 Converts movies and whole seasons to MP4 that plays anywhere (H.264, AAC
 stereo) with English subtitles burnt in, picking the audio and subtitle tracks
-itself. A torrent server queues finished downloads, a desktop converts them
-when it is on.
+itself. A torrent server arranges finished downloads into a library and queues
+them, a desktop converts them when it is on.
 
 ```
-torrent server                          library share                 desktop (Windows)
-Transmission done ──▶ enqueue.py ──▶ .convert/queue/<id>.json ◀── worker.py ──▶ convert_eng.py ──▶ <torrent>/0out/
+torrent server                                  library share                   desktop (Windows)
+Transmission done ──▶ enqueue.py ─┬─ arrange.py ──▶ series/<Show>/s01/…
+                                  └────────────▶ .convert/queue/<id>.json ◀── worker.py ──▶ 0conv/<profile>/…
 ```
 
 ## Pieces
@@ -15,7 +16,8 @@ Transmission done ──▶ enqueue.py ──▶ .convert/queue/<id>.json ◀─
 | File | Runs on | Does |
 |---|---|---|
 | `ffmpegger/convert_eng.py` | anywhere with Python 3.8+ and ffmpeg | converts one movie or a season folder |
-| `enqueue.py` | the torrent server | Transmission's script-torrent-done: picks a profile by folder, queues a job |
+| `enqueue.py` | the torrent server | Transmission's script-torrent-done: by the torrent's labels (or its folder) arranges it and queues jobs |
+| `arrange.py` | the torrent server | hardlinks a download into `series/<Show>/s01/` or `films/<Title>/` |
 | `worker.py` | the desktop | takes jobs from the queue, runs `convert_eng.py`, files the result |
 | `ffmpegger/jobs.py` | both | the queue layout |
 | `profiles.json` | the torrent server | folder → `convert_eng.py` arguments |
@@ -23,10 +25,31 @@ Transmission done ──▶ enqueue.py ──▶ .convert/queue/<id>.json ◀─
 | `cleanup-names.sh`, `inject-titles.sh` | by hand | strip release junk from names, put file names into MP4 titles |
 | `transmission-invoke-convert.sh`, `convert-remote.sh` | old | the previous push over ssh/rsync to a Linux VM; removed once the queue has converted a season |
 
+## Labels
+
+The bot puts labels on a torrent when it adds it; when the torrent finishes,
+`enqueue.py` gets them from Transmission and acts on them, wherever the torrent
+was downloaded:
+
+| Label | Does |
+|---|---|
+| `show:Better Call Saul` | arranges the episodes into `series/Better Call Saul/s01/`, `s02/`, … by `SxxEyy` |
+| `film` or `film:Rio (2011)` | arranges it into `films/Rio (2011)/`, the title from the name when not given |
+| `convert:bmw` | queues a conversion with that profile, of each arranged season or film folder, else of the torrent itself; one label per profile |
+
+Arranging uses hardlinks: no extra space, the torrent keeps seeding from where
+it is, deleting the torrent leaves the library alone. Several torrents of one
+show meet in one folder; an episode already there from another release is kept
+and the new one reported. English and Russian `.srt` files follow their video as
+`<video>.en.srt`, `<video>.ru.srt`. Each run leaves a record in
+`.convert/arranged/`. By hand: `arrange.py --library /mnt/lib --show NAME PATH`,
+or `enqueue.py --library /mnt/lib --labels "show:NAME,convert:web" PATH`.
+
 ## Profiles
 
-A torrent that finishes inside one of these folders of the library is queued;
-anything else is left alone. The deepest matching folder wins.
+A torrent without labels for us that finishes inside one of these folders of
+the library is queued with that profile; anything else is left alone. The
+deepest matching folder wins.
 
 | Profile | Folder | Result |
 |---|---|---|
@@ -35,9 +58,12 @@ anything else is left alone. The deepest matching folder wins.
 | bmw | `0unsort/0bmw` | as web, cropped and scaled to the car's 1920x700 screen |
 | ipad-rus | `0unsort/0ipad-rus` | Russian audio, no subtitles, 800 kbit/s |
 
-Results go to `0out` inside the torrent's folder (next to the file for a
-single-file torrent), with special characters in the names replaced by dots.
-The sources are never changed, so Transmission keeps seeding them.
+Results go to `0conv/<profile>/` plus the source's path, with its subfolders:
+`series/Better Call Saul/s01` converts into `0conv/bmw/series/Better Call Saul/s01/`,
+a download into `0unsort/0web/Show.S01` into `0conv/web/Show.S01/` (the profile or
+downloads folder is dropped). Special characters in file names become dots. The
+sources are never changed, so Transmission keeps seeding them, and converting a
+folder again only does what is not there yet.
 
 ## How convert_eng.py picks things
 
