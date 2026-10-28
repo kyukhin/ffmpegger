@@ -284,3 +284,20 @@ def test_keep_tree_converts_a_show_season_by_season(tmp_path):
     r = json.load(open(report))
     assert r["counts"] == {"converted": 1, "exists": 2, "skipped": 0, "failed": 0}
     assert r["videos"][2]["output"] == os.path.join("s03", "BCS.S03E01.mp4")
+
+
+@needs_ffmpeg
+def test_local_copy(tmp_path, monkeypatch):
+    folder = tmp_path / "share" / "Show"
+    make_video(folder / "Show.S01E01.mkv")
+    make_video(folder / "Show.S01E02.mkv", subs=())
+    with open(str(folder / "Show.S01E02.en.srt"), "w") as f:
+        f.write(SRT)
+    report = str(tmp_path / "r.json")
+    assert ce.main(["-d", str(folder), "-o", str(folder / "0out"), "-s", "50", "-lc", "-r", report]) == 0
+    assert sorted(os.listdir(str(folder / "0out"))) == ["Show.S01E01.mp4", "Show.S01E02.mp4"]
+
+    # Short of space: straight from the source
+    monkeypatch.setattr(ce.shutil, "disk_usage", lambda p: shutil._ntuple_diskusage(10, 10, 10))
+    os.remove(str(folder / "0out" / "Show.S01E01.mp4"))
+    assert ce.main(["-d", str(folder), "-o", str(folder / "0out"), "-s", "50", "-lc"]) == 0

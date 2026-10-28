@@ -10,6 +10,7 @@ import json
 import os
 from os.path import basename, dirname, isdir, join, realpath, relpath, splitext
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,7 @@ def parse_args(argv=None):
         "audio_lang": "eng",
         "fixup_names": False,
         "keep_tree": False,
+        "local_copy": False,
         "root_dir": os.getcwd(),
         "out_dir": os.getcwd(),
         "overwrite": False,
@@ -85,6 +87,10 @@ def parse_args(argv=None):
 
     parser.add_argument("-k", "--keep_tree",
                         help="Keep the source's subfolders in the output: s01/x.mkv -> OUTPUT/s01/x.mp4.",
+                        action="store_true")
+
+    parser.add_argument("-lc", "--local_copy",
+                        help="Copy each video to the local temp folder first: for sources on a network share.",
                         action="store_true")
 
     parser.add_argument("-o", "--output",
@@ -143,6 +149,7 @@ def parse_args(argv=None):
     if args.directory: cfg["root_dir"] = args.directory
     cfg["fixup_names"] = args.fixup_names
     cfg["keep_tree"] = args.keep_tree
+    cfg["local_copy"] = args.local_copy
     if args.audio_enforce is not None: cfg["audio_enforce"] = args.audio_enforce
     if args.output: cfg["out_dir"] = args.output
     cfg["report"] = args.report
@@ -371,6 +378,26 @@ def full_speed(proc):
     ctypes.windll.kernel32.SetProcessInformation(ctypes.c_void_p(int(proc._handle)), process_power_throttling,
                                                  ctypes.byref(state), ctypes.sizeof(state))
 
+def local_copy(path, tmp):
+    """A copy of path in tmp, or path itself when the disk is short of space. Over a network share
+    one copy at full speed beats ffmpeg's reads: the subtitles filter reads the whole file before
+    each pass starts, then the pass reads it again, four times in all for two passes."""
+    size = os.path.getsize(path)
+    free = shutil.disk_usage(tmp).free
+    if free < size + (2 << 30):
+        print("WRN: %.1f GB free in %s, %.1f GB needed: reading over the network" % (free / 2**30, tmp, size / 2**30))
+        return path
+    dst = join(tmp, "source" + splitext(path)[1])
+    while os.path.exists(dst):
+        dst = join(tmp, "source-%d%s" % (len(os.listdir(tmp)), splitext(path)[1]))
+    started = time.time()
+    with open(path, "rb") as fi, open(dst, "wb") as fo:
+        shutil.copyfileobj(fi, fo, 8 << 20)
+    took = max(time.time() - started, 0.001)
+    print("INFO: copied %s to the local disk, %.1f GB in %d s, %.0f MB/s"
+          % (basename(path), size / 2**30, took, size / 2**20 / took))
+    return dst
+
 def run_ffmpeg(cmd):
     """None on success, otherwise the end of ffmpeg's error output.
     In a terminal ffmpeg shows its progress; under a worker its output is kept
@@ -418,15 +445,15 @@ def convert_one(cfg, e):
         return dict(item, status="failed", reason="no video stream")
     print("INFO: OK: found video track 0:%d Resolution %sx%s" % (v["index"], v.get("width"), v.get("height")))
 
-    subs = None
+    burn, si = False, None
     if not cfg["subtitles_disabled"]:
         if ext_subs:
-            subs = "subtitles=filename=" + filter_path(ext_subs)
+            burn = True
             item["subtitles"] = "external " + relpath(ext_subs, root)
         else:
             si, why = pick_subtitles(streams)
             if si is not None:
-                subs = "subtitles=filename=%s:si=%d" % (filter_path(video), si)
+                burn = True
                 item["subtitles"] = why
             elif cfg["ignore_no_subtitles"]:
                 print("WRN: %s, proceeding without subtitles." % why)
@@ -434,10 +461,8 @@ def convert_one(cfg, e):
             else:
                 print("ERR:", why)
                 return dict(item, status="skipped", reason=why)
-        if subs:
+        if burn:
             print("INFO: OK: subtitles", item["subtitles"])
-            if cfg["settings_subtitles"]:
-                subs += ":" + cfg["settings_subtitles"]
 
     if cfg["a_stream"]:
         astream, item["audio"] = cfg["a_stream"], "set explicitly"
@@ -453,21 +478,6 @@ def convert_one(cfg, e):
     except ValueError as err:
         print("ERR:", err)
         return dict(item, status="failed", reason=str(err))
-    if subs:
-        vf.append(subs)
-    if cfg["verbose"]: print("DBG: video filter setting:", vf)
-
-    common = ["ffmpeg", "-hide_banner", "-nostdin", "-y",
-              "-i", video,
-              # Video setting
-              "-map", "0:%d" % v["index"], "-c:v", "libx264",
-              # Audio setting
-              "-map", astream, "-c:a", "aac",
-              # TODO: extract into param. These key turns sound into stereo
-              # from, say 5.1. Nothing but mono/stereo can be played on iPhone
-              "-ac", "2"]
-    if vf:
-        common += ["-vf", ",".join(vf)]
 
     # Written under another name and renamed when complete: an interrupted run
     # leaves no half file that a later run would take for done
@@ -475,6 +485,29 @@ def convert_one(cfg, e):
     os.makedirs(dirname(out), exist_ok=True)
     started = time.time()
     with tempfile.TemporaryDirectory(prefix="ffmpegger-") as tmp:
+        src, subs_src = video, ext_subs
+        if cfg["local_copy"]:
+            src = local_copy(video, tmp)
+            if ext_subs and src != video:
+                subs_src = local_copy(ext_subs, tmp)
+        if burn:
+            subs = ("subtitles=filename=" + filter_path(subs_src) if ext_subs
+                    else "subtitles=filename=%s:si=%d" % (filter_path(src), si))
+            vf.append(subs + (":" + cfg["settings_subtitles"] if cfg["settings_subtitles"] else ""))
+        if cfg["verbose"]: print("DBG: video filter setting:", vf)
+
+        common = ["ffmpeg", "-hide_banner", "-nostdin", "-y",
+                  "-i", src,
+                  # Video setting
+                  "-map", "0:%d" % v["index"], "-c:v", "libx264",
+                  # Audio setting
+                  "-map", astream, "-c:a", "aac",
+                  # TODO: extract into param. These key turns sound into stereo
+                  # from, say 5.1. Nothing but mono/stereo can be played on iPhone
+                  "-ac", "2"]
+        if vf:
+            common += ["-vf", ",".join(vf)]
+
         if cfg["size_target"]:
             print("Will do two pass converion as bitrate was specified")
             rate = ["-b:v", str(cfg["size_target"]) + "k"]

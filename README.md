@@ -83,8 +83,11 @@ the exit code and a summary with every skipped or failed episode and the
 reason. To run a failed job again after fixing it, move its `.json` back to
 `queue/` (or queue the folder again with `enqueue.py`).
 
-The worker converts one job at a time on every core, keeps Windows from
-sleeping while a job runs, and on start returns its own unfinished jobs to
+On Windows the worker copies each video to the local temp folder before
+converting it (`--local_copy`, skipped when the disk is short of space): ffmpeg's
+subtitles filter reads the whole file before each pass, so two passes over the
+share would read a 12 GB film four times. The worker converts one job at a time
+on every core, keeps Windows from sleeping while a job runs, and on start returns its own unfinished jobs to
 the queue: a shutdown in the middle of a season costs only the episode that was
 running.
 

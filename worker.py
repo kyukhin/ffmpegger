@@ -137,6 +137,8 @@ def run(library, job_id, job, priority="normal"):
     elif bad:
         code, reason = None, "the job sets paths itself: " + " ".join(bad)
     else:
+        # On Windows the library is a share: one local copy instead of four reads over the network
+        extra += ["--local_copy"] if os.name == "nt" else []
         cmd = [python(), CONVERT, "-d", src, "-o", out, "-r", report] + extra + job.get("args", [])
         log.info("converting %s %s (%s)", job_id, job["path"], job.get("profile"))
         started = time.time()
