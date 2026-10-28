@@ -480,7 +480,8 @@ def main(argv=None):
     """0: everything converted or there already. 1: something was skipped or
     failed, see the report. 2: no videos found."""
     try:
-        sys.stdout.reconfigure(line_buffering=True)
+        # Into a file Windows Python writes cp1252 and dies on the first Cyrillic name
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except AttributeError:
         pass
     cfg = parse_args(argv)

@@ -128,7 +128,7 @@ def run(library, job_id, job):
             f.flush()
             with keep_awake():
                 code = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                       **low_priority())
+                                       env=dict(os.environ, PYTHONIOENCODING="utf-8:replace"), **low_priority())
         reason = "" if code == 0 else "convert_eng.py exit code %d" % code
         job["seconds"] = round(time.time() - started)
     job.update(finished=jobs.now(), exit=code, reason=reason, result=summary(report))

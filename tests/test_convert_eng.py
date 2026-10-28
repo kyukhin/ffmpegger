@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -248,3 +249,18 @@ def test_single_pass_and_video_fit(tmp_path):
                             "stream=width,height", "-of", "csv=p=0", os.path.join(out, "m.mp4")],
                            capture_output=True, text=True, check=True)
     assert probe.stdout.strip() == "160,60"
+
+
+@needs_ffmpeg
+def test_cyrillic_names_with_a_windows_console_encoding(tmp_path):
+    """Under the worker on Windows the output goes to a file in cp1252: names in Cyrillic must not kill it."""
+    folder = tmp_path / "Тест (2001)"
+    make_video(folder / "Серия.S01E01.mkv")
+    make_video(folder / "Серия.S01E02.mkv")
+    log = tmp_path / "log.txt"
+    with open(str(log), "w") as f:
+        code = subprocess.call([sys.executable, ce.__file__, "-v", "-d", str(folder), "-o", str(folder / "0out"),
+                                "-s", "50"], stdout=f, stderr=subprocess.STDOUT,
+                               env=dict(os.environ, PYTHONIOENCODING="cp1252"))
+    assert code == 0, open(str(log), encoding="utf-8").read()[-2000:]
+    assert "Тест" in open(str(log), encoding="utf-8").read()
