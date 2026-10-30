@@ -173,7 +173,7 @@ episodes not yet done; the one cut in the middle is converted again.
 in `.convert/control/` that the worker carries out within a minute, also while
 it converts, with `shutdown /s /t 60` (cancel on the machine with `shutdown /a`);
 `status` lists the workers' heartbeats from `.convert/workers/`, which also say
-who is logged in to Windows. `power.py --library /mnt/lib pause <name>` leaves
+who is logged in to Windows and how busy its CPU and memory are. `power.py --library /mnt/lib pause <name>` leaves
 `.convert/control/<name>.pause.json`: within 20 seconds the worker freezes the
 running converter and ffmpeg where they are (nothing is lost, the CPU is free,
 Windows is still kept awake) and takes no new job, also after a reboot, until

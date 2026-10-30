@@ -41,6 +41,7 @@ CONTROL_EVERY = 20  # seconds between looks at the control files while convertin
 RESTART = 3  # the worker's exit code after a code update: the supervisor starts it again at once
 STARTED = None  # set in main: when this worker started
 CODE = None  # set in main: the commit it runs
+CPU_LAST = None  # (idle, all) CPU time at the last look, for the load in between
 # The worker decides where a job reads and writes, not the job file
 FORBIDDEN = ("-d", "--directory", "-o", "--output", "-r", "--report")
 
@@ -149,6 +150,39 @@ def logged_in():
         return sorted(users)
     except Exception as e:  # never let this stop the worker
         log.info("cannot tell who is logged in: %s", e)
+        return None
+
+
+def load():
+    """How busy the machine is, for the bot: {"cpu": % busy since the last call (from the second call on),
+    "mem": % of memory in use, "mem_used", "mem_total": GB}. Windows only, None elsewhere."""
+    global CPU_LAST
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        class Memory(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32)] + \
+                       [(n, ctypes.c_uint64) for n in ("TotalPhys", "AvailPhys", "TotalPageFile", "AvailPageFile",
+                                                       "TotalVirtual", "AvailVirtual", "AvailExtendedVirtual")]
+
+        k = ctypes.WinDLL("kernel32")
+        m = Memory(dwLength=ctypes.sizeof(Memory))
+        out = {}
+        if k.GlobalMemoryStatusEx(ctypes.byref(m)):
+            out.update(mem=m.dwMemoryLoad, mem_used=round((m.TotalPhys - m.AvailPhys) / 2 ** 30, 1),
+                       mem_total=round(m.TotalPhys / 2 ** 30, 1))
+        # FILETIMEs in 100 ns; kernel time includes idle time
+        idle, kernel, user = ctypes.c_uint64(), ctypes.c_uint64(), ctypes.c_uint64()
+        if k.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+            now = (idle.value, kernel.value + user.value)
+            if CPU_LAST and now[1] > CPU_LAST[1]:
+                out["cpu"] = round(100 * (1 - (now[0] - CPU_LAST[0]) / (now[1] - CPU_LAST[1])))
+            CPU_LAST = now
+        return out or None
+    except Exception as e:  # never let this stop the worker
+        log.info("cannot tell the load: %s", e)
         return None
 
 
@@ -380,12 +414,13 @@ def supervise(argv):
 
 
 def heartbeat(library, name, state, job_id=None):
-    """When this worker was last seen, what it does, who is logged in and its address, for power.py and
-    the bot. state "off": it is shutting the machine down."""
+    """When this worker was last seen, what it does, who is logged in, its address and load, for power.py
+    and the bot. state "off": it is shutting the machine down."""
     path = jobs.worker_file(library, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED, "code": CODE,
-                      "users": logged_in(), "ip": address(library), "pid": os.getpid(), "os": platform.platform()})
+                      "users": logged_in(), "ip": address(library), "load": load(), "pid": os.getpid(),
+                      "os": platform.platform()})
 
 
 def command(library, name):
