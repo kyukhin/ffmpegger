@@ -5,7 +5,10 @@ is not always on: jobs wait in the queue while it is off, and a job cut by a
 shutdown goes back to the queue on the next start and resumes with the episodes
 not yet done. While a job runs, Windows is kept from sleeping. The worker
 writes a heartbeat to .convert/workers/<name>.json and obeys power.py's commands
-in .convert/control/<name>.json: off, or off when the queue is empty.
+in .convert/control/<name>.json: off, or off when the queue is empty. While
+.convert/control/<name>.pause.json is there it converts nothing: the running
+converter is frozen where it is, no job is taken, and it goes on when the file
+is gone.
 
 Started without --once it keeps itself current: before taking a job it does a
 git pull of its checkout, and when the code changed it starts again on the new
@@ -24,6 +27,7 @@ import logging.handlers
 import os
 import platform
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -33,7 +37,7 @@ from ffmpegger import jobs
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 CONVERT = os.path.join(HERE, "ffmpegger", "convert_eng.py")
-CONTROL_EVERY = 20  # seconds between looks at the control file while converting
+CONTROL_EVERY = 20  # seconds between looks at the control files while converting
 RESTART = 3  # the worker's exit code after a code update: the supervisor starts it again at once
 STARTED = None  # set in main: when this worker started
 CODE = None  # set in main: the commit it runs
@@ -208,6 +212,10 @@ def kernel32():
     k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
     k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
     k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                            ctypes.c_void_p]
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     k.CloseHandle.argtypes = [wintypes.HANDLE]
     return k
 
@@ -255,6 +263,99 @@ def kill_on_close(proc):
 def release(job):
     if job:
         kernel32().CloseHandle(job)
+
+
+def group(proc):
+    """On Windows a job object holding proc and everything it starts, for members(); None elsewhere, or
+    when Windows refuses (then a pause cannot freeze the converter, and says so)."""
+    if os.name != "nt":
+        return None
+    try:
+        k = kernel32()
+        job = k.CreateJobObjectW(None, None)
+        if job and not k.AssignProcessToJobObject(job, int(proc._handle)):
+            k.CloseHandle(job)
+            job = None
+        return job or None
+    except Exception as e:  # never let this stop the worker
+        log.info("the converter cannot be paused: %s", e)
+        return None
+
+
+def members(proc, job):
+    """Pids of proc and everything it started: its job object's list on Windows, its tree from ps elsewhere."""
+    if os.name == "nt":
+        if not job:
+            return []
+        import ctypes
+        from ctypes import wintypes
+
+        class Ids(ctypes.Structure):
+            _fields_ = [("Assigned", wintypes.DWORD), ("Listed", wintypes.DWORD), ("Ids", ctypes.c_size_t * 64)]
+
+        ids = Ids()
+        # 3: JobObjectBasicProcessIdList
+        if not kernel32().QueryInformationJobObject(job, 3, ctypes.byref(ids), ctypes.sizeof(ids), None):
+            return []
+        return [ids.Ids[i] for i in range(ids.Listed)]
+    children = {}
+    for line in subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="], capture_output=True, text=True).stdout.splitlines():
+        pid, ppid = map(int, line.split())
+        children.setdefault(ppid, []).append(pid)
+    found, todo = [], [proc.pid]
+    while todo:
+        found.append(todo.pop(0))
+        todo += children.get(found[-1], [])
+    return found
+
+
+def freeze(pids, on):
+    """Suspends (on) or resumes these processes: the pids it could."""
+    done = []
+    for pid in pids:
+        try:
+            if os.name == "nt":
+                import ctypes
+                k, nt = kernel32(), ctypes.WinDLL("ntdll")
+                nt.NtSuspendProcess.argtypes = nt.NtResumeProcess.argtypes = [ctypes.c_void_p]
+                handle = k.OpenProcess(0x0800, False, pid)  # PROCESS_SUSPEND_RESUME
+                if not handle:
+                    continue
+                try:
+                    if (nt.NtSuspendProcess if on else nt.NtResumeProcess)(handle) != 0:
+                        continue
+                finally:
+                    k.CloseHandle(handle)
+            else:
+                os.kill(pid, signal.SIGSTOP if on else signal.SIGCONT)
+            done.append(pid)
+        except OSError:
+            pass
+    return done
+
+
+def paused(library, name):
+    return os.path.exists(jobs.pause_file(library, name))
+
+
+def hold(library, name, proc, job, frozen):
+    """Freezes the converter when the worker is paused and lets it go when not. Returns the pids frozen now:
+    None when not paused, [] when paused but nothing could be frozen (it converts on, the heartbeat says so)."""
+    if paused(library, name) and frozen is None:
+        tried, frozen = [], []
+        for _ in range(3):  # again for a process started while the others froze
+            new = [p for p in members(proc, job) if p not in tried]
+            if not new:
+                break
+            tried += new
+            frozen += freeze(new, True)
+        log.info("paused: %s", "%d processes frozen" % len(frozen) if frozen else "nothing could be frozen")
+        return frozen
+    if frozen is not None and not paused(library, name):
+        freeze(reversed(frozen), False)
+        log.info("resumed")
+        return None
+    return frozen
 
 
 def supervise(argv):
@@ -366,7 +467,8 @@ def run(library, job_id, job, priority="normal", name=None):
                 proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                         env=dict(os.environ, PYTHONIOENCODING="utf-8:replace"),
                                         **priority_args(priority))
-                # Converting can take hours: keep the heartbeat going and an "off" obeyed meanwhile
+                procs, frozen = group(proc), None
+                # Converting can take hours: keep the heartbeat going, a pause and an "off" obeyed meanwhile
                 while True:
                     try:
                         code = proc.wait(CONTROL_EVERY)
@@ -375,11 +477,13 @@ def run(library, job_id, job, priority="normal", name=None):
                         pass
                     if name:
                         try:
-                            heartbeat(library, name, "converting", job_id)
+                            frozen = hold(library, name, proc, procs, frozen)
+                            heartbeat(library, name, "paused" if frozen else "converting", job_id)
                             if command(library, name) == "off":
                                 power_off(library, name, "asked to switch off while converting " + job["path"])
                         except OSError:
                             pass
+                release(procs)
         reason = "" if code == 0 else "convert_eng.py exit code %d" % code
         job["seconds"] = round(time.time() - started)
     job.update(finished=jobs.now(), exit=code, reason=reason, result=summary(report))
@@ -416,19 +520,20 @@ def main(argv=None):
             if not requeued:
                 requeue_own(a.library, a.name)
                 requeued = True
-            heartbeat(a.library, a.name, "idle")
+            stop = paused(a.library, a.name)
+            heartbeat(a.library, a.name, "paused" if stop else "idle")
             action = command(a.library, a.name)
             if action == "off":
                 power_off(a.library, a.name, "asked to switch off")
             # The job was queued with the torrent server's code: take it on the newest code there is
-            if a.child and jobs.listing(a.library, "queue") and update():
+            if not stop and a.child and jobs.listing(a.library, "queue") and update():
                 return RESTART
-            got = claim(a.library, a.name)
+            got = None if stop else claim(a.library, a.name)
             if got:
                 heartbeat(a.library, a.name, "converting", got[0])
                 run(a.library, *got, priority=a.priority, name=a.name)
                 continue
-            if action == "off-when-idle":
+            if action == "off-when-idle" and not stop:
                 power_off(a.library, a.name, "the queue is empty")
         except OSError as e:
             # The share is not there yet (just booted, network down): try again later,

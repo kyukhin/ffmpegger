@@ -351,3 +351,60 @@ def test_supervisor_starts_the_worker_again(monkeypatch):
         worker.supervise(["--library", "L"])
     assert len(started) == 2 and started[0][-3:] == ["--child", "--library", "L"]
     assert slept == [60] and updates == [1]  # at once after an update, after a minute and a pull when it died
+
+
+def test_paused_worker_takes_no_job(tmp_path):
+    import power
+    lib = tmp_path / "lib"
+    put(lib, "1-gone", path="gone/x")
+    assert power.main(["--library", str(lib), "pause", "pc", "--by", "@me"]) == 0
+    assert jobs.read(jobs.pause_file(str(lib), "pc"))["by"] == "@me"
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    assert [i for i, _ in jobs.listing(str(lib), "queue")] == ["1-gone"]
+    assert jobs.read(jobs.worker_file(str(lib), "pc"))["state"] == "paused"
+    assert power.main(["--library", str(lib), "resume", "pc"]) == 0
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    assert [i for i, _ in jobs.listing(str(lib), "failed")] == ["1-gone"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="ps and signals")
+def test_pause_freezes_the_converter_and_its_children(tmp_path):
+    import subprocess
+    import time
+    lib = str(tmp_path / "lib")
+    proc = subprocess.Popen(["sh", "-c", "sleep 30 & wait"])
+    try:
+        for _ in range(50):
+            if len(worker.members(proc, None)) == 2:
+                break
+            time.sleep(0.1)
+
+        def stat(pid):
+            return subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+
+        assert worker.hold(lib, "pc", proc, None, None) is None  # not paused
+        os.makedirs(os.path.dirname(jobs.pause_file(lib, "pc")))
+        jobs.write(jobs.pause_file(lib, "pc"), {})
+        frozen = worker.hold(lib, "pc", proc, None, None)
+        assert sorted(frozen) == sorted(worker.members(proc, None)) and len(frozen) == 2
+        assert all(stat(p).startswith("T") for p in frozen)
+        assert worker.hold(lib, "pc", proc, None, frozen) == frozen  # still paused: nothing again
+        os.remove(jobs.pause_file(lib, "pc"))
+        assert worker.hold(lib, "pc", proc, None, frozen) is None
+        assert not any(stat(p).startswith("T") for p in frozen)
+    finally:
+        for p in worker.members(proc, None):
+            os.kill(p, 9)
+        proc.wait()
+
+
+def test_power_auto_does_not_wake_a_paused_worker(tmp_path, monkeypatch):
+    import power
+    lib = str(tmp_path / "lib")
+    sent = []
+    monkeypatch.setattr(power, "wake", lambda *a, **k: sent.append(1))
+    put(tmp_path / "lib", "1-job", path="x")
+    assert power.main(["--library", lib, "pause", "pc"]) == 0
+    assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff") is None and sent == []
+    assert power.main(["--library", lib, "resume", "pc"]) == 0
+    assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff")[0] == "wake" and sent == [1]

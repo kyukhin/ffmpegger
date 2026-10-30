@@ -5,14 +5,17 @@
     power.py --library /mnt/lib off caligula        # the worker runs `shutdown /s /t 60` within a minute
     power.py --library /mnt/lib off-when-idle caligula   # ... once the queue is empty
     power.py --library /mnt/lib cancel caligula     # forget a command not yet carried out
+    power.py --library /mnt/lib pause caligula      # convert nothing: the running job freezes where it is
+    power.py --library /mnt/lib resume caligula     # go on
     power.py --library /mnt/lib status              # every worker's last heartbeat
     power.py --library /mnt/lib auto --name caligula --mac bc:fc:e7:b5:d3:30 --interface eth0
                                                     # once a minute: wake for jobs, off when idle (see auto)
 
 Off goes through the worker (worker.py), which reads .convert/control/<name>.json
 on the share, also while it converts; so the worker must be running, which it
-is after the user logs in. Wake needs Wake-on-LAN in the BIOS and the network
-card's driver, see README.md."""
+is after the user logs in. Pause stays until resume, through reboots, and auto
+does not wake a paused worker. Wake needs Wake-on-LAN in the BIOS and the
+network card's driver, see README.md."""
 
 import argparse
 import datetime
@@ -99,6 +102,7 @@ def auto(library, name, mac, interface=None, idle_off=10, wake_every=10, now=Non
         beat = None
     online = is_on(beat, now)
     waiting = len(jobs.listing(library, "queue"))
+    paused = os.path.exists(jobs.pause_file(library, name))
     mine = [i for i, j in jobs.listing(library, "running") if j.get("worker") == name]
     users = beat.get("users") if beat else None
     event = None
@@ -118,7 +122,7 @@ def auto(library, name, mac, interface=None, idle_off=10, wake_every=10, now=Non
             st["idle_since"] = None
     else:
         st["idle_since"] = None
-        if not waiting:
+        if not waiting or paused:
             st["wake_tries"] = 0
         elif not st.get("last_wake") or now - st["last_wake"] >= wake_every * 60:
             wake(mac, interface)
@@ -143,8 +147,9 @@ def main(argv=None):
     w.add_argument("--mac", required=True)
     w.add_argument("--interface", help="send out of this network interface, e.g. eth0")
     w.add_argument("--broadcast", action="append", help="broadcast address, default 255.255.255.255")
-    for action in ("off", "off-when-idle", "cancel"):
+    for action in ("off", "off-when-idle", "cancel", "pause", "resume"):
         sub.add_parser(action).add_argument("name", help="the worker's name, its machine's hostname")
+    sub.choices["pause"].add_argument("--by", help="who paused it, for the bot; this host by default")
     sub.add_parser("status")
     au = sub.add_parser("auto")
     au.add_argument("--name", required=True)
@@ -170,7 +175,20 @@ def main(argv=None):
         for name, beat, ago in statuses(a.library):
             state = ("on, " + beat["state"] + (" " + beat["job"] if beat.get("job") else "")) if is_on(beat, now) \
                 else "off or not running"
-            print("%-12s %s, last seen %s (%d s ago)" % (name, state, beat["seen"], ago))
+            pause = " (pause asked)" if os.path.exists(jobs.pause_file(a.library, name)) else ""
+            print("%-12s %s%s, last seen %s (%d s ago)" % (name, state, pause, beat["seen"], ago))
+        return 0
+    if a.action in ("pause", "resume"):
+        path = jobs.pause_file(a.library, a.name)
+        if a.action == "pause":
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            jobs.write(path, {"at": jobs.now(), "by": a.by or socket.gethostname()})
+            print("%s: paused until resume, a running job freezes within 20 s" % a.name)
+        elif os.path.exists(path):
+            os.remove(path)
+            print("%s: goes on within 20 s" % a.name)
+        else:
+            print("%s was not paused" % a.name)
         return 0
     path = jobs.control_file(a.library, a.name)
     if a.action == "cancel":

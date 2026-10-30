@@ -173,9 +173,13 @@ episodes not yet done; the one cut in the middle is converted again.
 in `.convert/control/` that the worker carries out within a minute, also while
 it converts, with `shutdown /s /t 60` (cancel on the machine with `shutdown /a`);
 `status` lists the workers' heartbeats from `.convert/workers/`, which also say
-who is logged in to Windows. `power.py auto`, run every minute on the server,
-wakes a worker that is off when jobs wait (again every 10 minutes while it stays
-off) and switches it off once the queue has been empty and the worker idle for
+who is logged in to Windows. `power.py --library /mnt/lib pause <name>` leaves
+`.convert/control/<name>.pause.json`: within 20 seconds the worker freezes the
+running converter and ffmpeg where they are (nothing is lost, the CPU is free,
+Windows is still kept awake) and takes no new job, also after a reboot, until
+`resume` removes the file. `power.py auto`, run every minute on the server,
+wakes a worker that is off when jobs wait and it is not paused (again every 10
+minutes while it stays off) and switches it off once the queue has been empty and the worker idle for
 10 minutes, but only a machine it woke itself and only while nobody is logged
 in: a machine someone switched on or logged in to is theirs. Its memory and
 events are in `.convert/power/<name>.json`. Wake-on-LAN
