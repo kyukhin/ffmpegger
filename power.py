@@ -7,6 +7,8 @@
     power.py --library /mnt/lib cancel caligula     # forget a command not yet carried out
     power.py --library /mnt/lib pause caligula      # convert nothing: the running job freezes where it is
     power.py --library /mnt/lib resume caligula     # go on
+    power.py --library /mnt/lib low caligula        # someone plays: idle priority on half of the CPUs
+    power.py --library /mnt/lib normal caligula     # full speed again
     power.py --library /mnt/lib status              # every worker's last heartbeat
     power.py --library /mnt/lib auto --name caligula --mac bc:fc:e7:b5:d3:30 --interface eth0
                                                     # once a minute: wake for jobs, off when idle (see auto)
@@ -14,7 +16,7 @@
 Off goes through the worker (worker.py), which reads .convert/control/<name>.json
 on the share, also while it converts; so the worker must be running, which it
 is after the user logs in. Pause stays until resume, through reboots, and auto
-does not wake a paused worker. Wake needs Wake-on-LAN in the BIOS and the
+does not wake a paused worker; low likewise until normal. Wake needs Wake-on-LAN in the BIOS and the
 network card's driver, see README.md."""
 
 import argparse
@@ -147,9 +149,11 @@ def main(argv=None):
     w.add_argument("--mac", required=True)
     w.add_argument("--interface", help="send out of this network interface, e.g. eth0")
     w.add_argument("--broadcast", action="append", help="broadcast address, default 255.255.255.255")
-    for action in ("off", "off-when-idle", "cancel", "pause", "resume"):
+    for action in ("off", "off-when-idle", "cancel", "pause", "resume", "low", "normal"):
         sub.add_parser(action).add_argument("name", help="the worker's name, its machine's hostname")
-    sub.choices["pause"].add_argument("--by", help="who paused it, for the bot; this host by default")
+    for action in ("pause", "low"):
+        sub.choices[action].add_argument("--by", help="who asked, for the bot; this host by default")
+    sub.choices["low"].add_argument("--cpus", type=float, default=0.5, help="share of the CPUs to use, half by default")
     sub.add_parser("status")
     au = sub.add_parser("auto")
     au.add_argument("--name", required=True)
@@ -176,6 +180,7 @@ def main(argv=None):
             state = ("on, " + beat["state"] + (" " + beat["job"] if beat.get("job") else "")) if is_on(beat, now) \
                 else "off or not running"
             pause = " (pause asked)" if os.path.exists(jobs.pause_file(a.library, name)) else ""
+            pause += " (low asked)" if os.path.exists(jobs.low_file(a.library, name)) else ""
             print("%-12s %s%s, last seen %s (%d s ago)" % (name, state, pause, beat["seen"], ago))
         return 0
     if a.action in ("pause", "resume"):
@@ -189,6 +194,20 @@ def main(argv=None):
             print("%s: goes on within 20 s" % a.name)
         else:
             print("%s was not paused" % a.name)
+        return 0
+    if a.action in ("low", "normal"):
+        path = jobs.low_file(a.library, a.name)
+        if a.action == "low":
+            if not 0 < a.cpus <= 1:
+                p.error("--cpus is a share: more than 0, at most 1")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            jobs.write(path, {"at": jobs.now(), "by": a.by or socket.gethostname(), "cpus": a.cpus})
+            print("%s: idle priority on %d%% of the CPUs until normal, within 20 s" % (a.name, round(a.cpus * 100)))
+        elif os.path.exists(path):
+            os.remove(path)
+            print("%s: full speed again within 20 s" % a.name)
+        else:
+            print("%s was not lowered" % a.name)
         return 0
     path = jobs.control_file(a.library, a.name)
     if a.action == "cancel":

@@ -8,7 +8,8 @@ writes a heartbeat to .convert/workers/<name>.json and obeys power.py's commands
 in .convert/control/<name>.json: off, or off when the queue is empty. While
 .convert/control/<name>.pause.json is there it converts nothing: the running
 converter is frozen where it is, no job is taken, and it goes on when the file
-is gone.
+is gone. While .convert/control/<name>.low.json is there the converter runs at
+idle priority on half of the CPUs, so a game comes first.
 
 Started without --once it keeps itself current: before taking a job it does a
 git pull of its checkout, and when the code changed it starts again on the new
@@ -251,6 +252,11 @@ def kernel32():
     k.OpenProcess.restype = wintypes.HANDLE
     k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+    k.GetCurrentProcess.restype = wintypes.HANDLE
+    k.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t),
+                                         ctypes.POINTER(ctypes.c_size_t)]
     return k
 
 
@@ -392,6 +398,80 @@ def hold(library, name, proc, job, frozen):
     return frozen
 
 
+def cpus():
+    """This machine's logical processors, by number."""
+    if os.name == "nt":
+        import ctypes
+        k, mine, every = kernel32(), ctypes.c_size_t(), ctypes.c_size_t()
+        if k.GetProcessAffinityMask(k.GetCurrentProcess(), ctypes.byref(mine), ctypes.byref(every)):
+            return [i for i in range(64) if every.value >> i & 1]
+    if hasattr(os, "sched_getaffinity"):
+        return sorted(os.sched_getaffinity(0))
+    return list(range(os.cpu_count() or 1))
+
+
+def lowered(library, name):
+    """The CPUs the converter may use while .convert/control/<name>.low.json is there, else None: the last
+    share of them (cpus in the file, half by default). Intel's hybrid CPUs number the P-cores' threads first,
+    so on the i9-14900KS (8 P-cores with two threads each, then 16 E-cores) half is the E-cores, and the
+    P-cores stay with the game."""
+    path = jobs.low_file(library, name)
+    if not os.path.exists(path):
+        return None
+    try:
+        share = float(jobs.read(path).get("cpus", 0.5))
+    except (OSError, ValueError, TypeError, AttributeError):
+        share = 0.5
+    every = cpus()
+    return every[-max(1, min(len(every), round(len(every) * share))):]
+
+
+def lower(pids, use, priority):
+    """Idle priority on the CPUs `use` for these processes; with use None back to the worker's priority on
+    every CPU. The pids it could. Elsewhere than Windows only root may raise a priority again: there a
+    lowered converter gets every CPU back but stays at idle priority until its job ends."""
+    done = []
+    for pid in pids:
+        try:
+            if os.name == "nt":
+                k = kernel32()
+                handle = k.OpenProcess(0x0600, False, pid)  # PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION
+                if not handle:
+                    continue
+                try:
+                    # IDLE, BELOW_NORMAL, NORMAL_PRIORITY_CLASS
+                    level = 0x40 if use else 0x4000 if priority == "low" else 0x20
+                    if not (k.SetPriorityClass(handle, level)
+                            and k.SetProcessAffinityMask(handle, sum(1 << c for c in use or cpus()))):
+                        continue
+                finally:
+                    k.CloseHandle(handle)
+            else:
+                if hasattr(os, "sched_setaffinity"):
+                    os.sched_setaffinity(pid, use or cpus())
+                os.setpriority(os.PRIO_PROCESS, pid, 19 if use else 10 if priority == "low" else 0)
+            done.append(pid)
+        except OSError:
+            pass
+    return done
+
+
+def ease(library, name, proc, job, eased, priority):
+    """Keeps the converter and everything it starts low while the worker is lowered (see lowered), each time
+    also for processes started meanwhile, and puts it back once when not. Returns the CPUs it may use now,
+    None when not lowered."""
+    use = lowered(library, name)
+    if use:
+        done = lower(members(proc, job), use, priority)
+        if use != eased:
+            log.info("lowered: idle priority on %d of %d CPUs, %d processes", len(use), len(cpus()), len(done))
+        return use
+    if eased:
+        lower(members(proc, job), None, priority)
+        log.info("back to %s priority on every CPU", priority)
+    return None
+
+
 def supervise(argv):
     """What the scheduled task runs: the worker itself as a child process, started again at once when it
     exits for new code and a minute later when it dies. On Windows each child is in a job object (see
@@ -413,14 +493,14 @@ def supervise(argv):
         update()  # a fix pushed for what killed it
 
 
-def heartbeat(library, name, state, job_id=None):
+def heartbeat(library, name, state, job_id=None, low=None):
     """When this worker was last seen, what it does, who is logged in, its address and load, for power.py
-    and the bot. state "off": it is shutting the machine down."""
+    and the bot. state "off": it is shutting the machine down. low: the CPUs of a lowered worker."""
     path = jobs.worker_file(library, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED, "code": CODE,
                       "users": logged_in(), "ip": address(library), "load": load(), "pid": os.getpid(),
-                      "os": platform.platform()})
+                      "low": {"cpus": len(low), "of": len(cpus())} if low else None, "os": platform.platform()})
 
 
 def command(library, name):
@@ -502,22 +582,24 @@ def run(library, job_id, job, priority="normal", name=None):
                 proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                         env=dict(os.environ, PYTHONIOENCODING="utf-8:replace"),
                                         **priority_args(priority))
-                procs, frozen = group(proc), None
-                # Converting can take hours: keep the heartbeat going, a pause and an "off" obeyed meanwhile
+                procs, frozen, eased = group(proc), None, None
+                # Converting can take hours: keep the heartbeat going, a pause, a lowering and an "off" obeyed
+                # meanwhile, from the start
                 while True:
+                    if name:
+                        try:
+                            frozen = hold(library, name, proc, procs, frozen)
+                            eased = ease(library, name, proc, procs, eased, priority)
+                            heartbeat(library, name, "paused" if frozen else "converting", job_id, eased)
+                            if command(library, name) == "off":
+                                power_off(library, name, "asked to switch off while converting " + job["path"])
+                        except OSError:
+                            pass
                     try:
                         code = proc.wait(CONTROL_EVERY)
                         break
                     except subprocess.TimeoutExpired:
                         pass
-                    if name:
-                        try:
-                            frozen = hold(library, name, proc, procs, frozen)
-                            heartbeat(library, name, "paused" if frozen else "converting", job_id)
-                            if command(library, name) == "off":
-                                power_off(library, name, "asked to switch off while converting " + job["path"])
-                        except OSError:
-                            pass
                 release(procs)
         reason = "" if code == 0 else "convert_eng.py exit code %d" % code
         job["seconds"] = round(time.time() - started)
@@ -556,7 +638,7 @@ def main(argv=None):
                 requeue_own(a.library, a.name)
                 requeued = True
             stop = paused(a.library, a.name)
-            heartbeat(a.library, a.name, "paused" if stop else "idle")
+            heartbeat(a.library, a.name, "paused" if stop else "idle", low=lowered(a.library, a.name))
             action = command(a.library, a.name)
             if action == "off":
                 power_off(a.library, a.name, "asked to switch off")
@@ -565,7 +647,7 @@ def main(argv=None):
                 return RESTART
             got = None if stop else claim(a.library, a.name)
             if got:
-                heartbeat(a.library, a.name, "converting", got[0])
+                heartbeat(a.library, a.name, "converting", got[0], lowered(a.library, a.name))
                 run(a.library, *got, priority=a.priority, name=a.name)
                 continue
             if action == "off-when-idle" and not stop:

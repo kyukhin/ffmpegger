@@ -398,6 +398,55 @@ def test_pause_freezes_the_converter_and_its_children(tmp_path):
         proc.wait()
 
 
+def test_lowered_worker_says_so(tmp_path, monkeypatch):
+    import power
+    lib = tmp_path / "lib"
+    monkeypatch.setattr(worker, "cpus", lambda: list(range(32)))
+    assert power.main(["--library", str(lib), "low", "pc", "--by", "@me"]) == 0
+    assert jobs.read(jobs.low_file(str(lib), "pc"))["by"] == "@me"
+    assert worker.lowered(str(lib), "pc") == list(range(16, 32))  # the upper half: a hybrid Intel's E-cores
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    assert jobs.read(jobs.worker_file(str(lib), "pc"))["low"] == {"cpus": 16, "of": 32}
+    assert power.main(["--library", str(lib), "low", "pc", "--cpus", "0.25"]) == 0
+    assert worker.lowered(str(lib), "pc") == list(range(24, 32))
+    assert power.main(["--library", str(lib), "normal", "pc"]) == 0
+    assert worker.lowered(str(lib), "pc") is None
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    assert jobs.read(jobs.worker_file(str(lib), "pc"))["low"] is None
+    with pytest.raises(SystemExit):
+        power.main(["--library", str(lib), "low", "pc", "--cpus", "2"])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="ps and nice")
+def test_low_lowers_the_converter_and_its_children(tmp_path):
+    import subprocess
+    import time
+    lib = str(tmp_path / "lib")
+    proc = subprocess.Popen(["sh", "-c", "sleep 30 & wait"])
+    try:
+        for _ in range(50):
+            if len(worker.members(proc, None)) == 2:
+                break
+            time.sleep(0.1)
+
+        def nice(pid):
+            return int(subprocess.run(["ps", "-o", "nice=", "-p", str(pid)], capture_output=True, text=True).stdout)
+
+        assert worker.ease(lib, "pc", proc, None, None, "normal") is None  # not lowered
+        assert {nice(p) for p in worker.members(proc, None)} == {0}
+        os.makedirs(os.path.dirname(jobs.low_file(lib, "pc")))
+        jobs.write(jobs.low_file(lib, "pc"), {"cpus": 0.5})
+        eased = worker.ease(lib, "pc", proc, None, None, "normal")
+        assert eased == worker.cpus()[-max(1, round(len(worker.cpus()) / 2)):]
+        assert {nice(p) for p in worker.members(proc, None)} == {19}
+        os.remove(jobs.low_file(lib, "pc"))
+        assert worker.ease(lib, "pc", proc, None, eased, "normal") is None  # back; nice only for root
+    finally:
+        for p in worker.members(proc, None):
+            os.kill(p, 9)
+        proc.wait()
+
+
 def test_power_auto_does_not_wake_a_paused_worker(tmp_path, monkeypatch):
     import power
     lib = str(tmp_path / "lib")

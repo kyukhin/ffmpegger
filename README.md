@@ -178,7 +178,14 @@ who is logged in to Windows and how busy its CPU and memory are. `power.py --lib
 `.convert/control/<name>.pause.json`: within 20 seconds the worker freezes the
 running converter and ffmpeg where they are (nothing is lost, the CPU is free,
 Windows is still kept awake) and takes no new job, also after a reboot, until
-`resume` removes the file. `power.py auto`, run every minute on the server,
+`resume` removes the file. For when someone sits down to play, `power.py
+--library /mnt/lib low <name>` leaves `.convert/control/<name>.low.json`: within
+20 seconds the converter and ffmpeg drop to idle priority on the last half of
+the logical CPUs (`--cpus 0.25` for a quarter). Intel's hybrid CPUs number the
+P-cores' threads first, so on the i9-14900KS these are its 16 E-cores and the 8
+P-cores stay with the game. It holds for the next jobs and after a reboot too,
+until `normal` removes the file; the heartbeat says how many CPUs it uses.
+`power.py auto`, run every minute on the server,
 wakes a worker that is off when jobs wait and it is not paused (again every 10
 minutes while it stays off) and switches it off once the queue has been empty and the worker idle for
 10 minutes, but only a machine it woke itself and only while nobody is logged

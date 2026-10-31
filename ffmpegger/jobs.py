@@ -10,6 +10,7 @@ also over SMB:
     .convert/workers/<name>.json  each worker's heartbeat: when it was last seen, what it does
     .convert/control/<name>.json  a command for a worker from power.py: off, off-when-idle
     .convert/control/<name>.pause.json  there while the worker is paused: it converts nothing until removed
+    .convert/control/<name>.low.json    there while the worker is lowered: idle priority on part of the CPUs
     .convert/power/<name>.json    power.py auto's memory for a worker: whether it woke it, events
 
 Paths inside a job are relative to the library root with / as the separator,
@@ -84,6 +85,10 @@ def control_file(library, name):
 
 def pause_file(library, name):
     return os.path.join(library, QUEUE, "control", name + ".pause.json")
+
+
+def low_file(library, name):
+    return os.path.join(library, QUEUE, "control", name + ".low.json")
 
 
 def power_file(library, name):
