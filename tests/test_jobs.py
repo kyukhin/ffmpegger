@@ -408,3 +408,21 @@ def test_power_auto_does_not_wake_a_paused_worker(tmp_path, monkeypatch):
     assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff") is None and sent == []
     assert power.main(["--library", lib, "resume", "pc"]) == 0
     assert power.auto(lib, "pc", "aa:bb:cc:dd:ee:ff")[0] == "wake" and sent == [1]
+
+
+def test_season_named_by_its_folder(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    pack = lib / "0unsort" / "Rick and Morty (3 season) [Blu-ray Remux 1080p]"
+    touch(pack / "Rick and Morty - 301 - The Rickshank Rickdemption.mkv")
+    touch(pack / "Rick and Morty - 302 - Rickmancing the Stone.mkv")
+    monkeypatch.setenv("TR_TORRENT_DIR", str(pack.parent))
+    monkeypatch.setenv("TR_TORRENT_NAME", pack.name)
+    monkeypatch.setenv("TR_TORRENT_LABELS", "show:Rick and Morty,convert:web")
+    args = ["--library", str(lib), "--profiles", profiles_file(tmp_path)]
+    assert enqueue.main(args) == 0
+    assert sorted(os.listdir(str(lib / "series" / "Rick and Morty" / "s03"))) == [
+        "Rick and Morty - 301 - The Rickshank Rickdemption.mkv", "Rick and Morty - 302 - Rickmancing the Stone.mkv"]
+    assert [j["path"] for _, j in jobs.listing(str(lib), "queue")] == ["series/Rick and Morty/s03"]
+    # Again: there already, not a clash with itself, and not queued twice
+    assert enqueue.main(args) == 0
+    assert len(jobs.listing(str(lib), "queue")) == 1

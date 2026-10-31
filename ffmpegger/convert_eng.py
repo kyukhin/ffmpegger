@@ -24,6 +24,10 @@ TEXT_SUBS = ("subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text")
 # called 1920x1080 is not an episode
 EPISODE = [re.compile(r"s(\d{1,2})[ ._-]?[ex](\d{1,3})", re.IGNORECASE),
            re.compile(r"(?<!\d)(\d{1,2})x(\d{2,3})(?!\d)", re.IGNORECASE)]
+# The season of a folder: s03 (as arranged), Show.S04.1080p, Season 4, (3 season), 3 сезон
+SEASON = [re.compile(r"(?:^|[^a-z])s(\d{1,2})(?![e\d])", re.IGNORECASE),
+          re.compile(r"(?:season|сезон)[ ._-]*(\d{1,2})(?!\d)", re.IGNORECASE),
+          re.compile(r"(?<!\d)(\d{1,2})(?:st|nd|rd|th|-?й)?[ ._-]*(?:season|сезон)", re.IGNORECASE)]
 # en, eng, english as a word, also 2xEng from release names
 ENGLISH = re.compile(r"(?:^|[^a-z])(?:\d+x)?(?:en|eng|english)(?:[^a-z]|$)", re.IGNORECASE)
 # Worse kinds of subtitles: forced has only the foreign bits, SDH adds [door creaks]
@@ -179,12 +183,21 @@ def parse_args(argv=None):
     return cfg
 
 def episode_of(path):
-    """(season, episode) from a file name, or None."""
+    """(season, episode) from a file name, or None. Without S01E02 in the name, a name like
+    "Show - 301 - Title.mkv" in a folder of season 3 is s03e01: the season from the nearest folder that
+    names one, then exactly one number of that season and two digits in the name (not x264, 1080p)."""
     name = basename(path)
     for regex in EPISODE:
         m = regex.search(name)
         if m:
             return int(m.group(1)), int(m.group(2))
+    folder = dirname(path)
+    while basename(folder):
+        season = next((int(m.group(1)) for m in (r.search(basename(folder)) for r in SEASON) if m), None)
+        if season is not None:
+            eps = set(re.findall(r"(?<![\dxh])%d(\d{2})(?![\dpi])" % season, name, re.IGNORECASE))
+            return (season, int(eps.pop())) if len(eps) == 1 and season else None
+        folder = dirname(folder)
     return None
 
 def clean_name(name):

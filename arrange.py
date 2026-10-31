@@ -8,7 +8,7 @@ keeps seeding from where it is and the library takes no extra space:
         -> films/Rio (2011)/Rio.2011.1080p.BluRay.mkv
 
 Episodes go to their season by SxxEyy in the file name, whatever the torrent's
-layout. English and Russian .srt files follow their video as <video>.en.srt,
+layout, or by a name like "Show - 301 - Title" in a folder that names season 3. English and Russian .srt files follow their video as <video>.en.srt,
 <video>.ru.srt (.sdh, .forced kept), so the language survives leaving its
 Subs/English/ folder. Files already there are skipped; files without an episode
 number are reported, not guessed. A record of what went where is written to
@@ -123,18 +123,21 @@ def arrange(library, source, show=None, film=False, title=None):
     def holder(folder, ep):
         if folder not in episodes_in:
             names = os.listdir(folder) if os.path.isdir(folder) else []
-            episodes_in[folder] = {episode_of(n): n for n in names if n.lower().endswith(VIDEO_EXTS)}
+            episodes_in[folder] = {episode_of(os.path.join(folder, n)): n for n in names
+                                   if n.lower().endswith(VIDEO_EXTS)}
         return episodes_in[folder].get(ep)
 
     if show:
         record["show"] = show = safe(show)
+        # The torrent's own folder may be what names the season: Show (3 season)/Show - 301 - Title.mkv
+        top = os.path.basename(source) if os.path.isdir(source) else ""
         by_episode = {}
         for full, rel in subs:
-            ep = subtitle_episode(rel)
+            ep = subtitle_episode(os.path.join(top, rel))
             if ep:
                 by_episode.setdefault(ep, []).append((full, rel))
         for full, rel in videos:
-            ep = episode_of(rel)
+            ep = episode_of(os.path.join(top, rel))
             if not ep:
                 record["unplaced"].append(rel)
                 continue

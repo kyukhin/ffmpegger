@@ -78,6 +78,17 @@ def tree_hash(root, skip):
     ("/lib/Show.S02E01.1920x1080/Movie.mkv", None),
     ("Movie.1920x1080.mkv", None),
     ("Rio.2011.1080p.BluRay.x264.mkv", None),
+    # No SxxEyy: season from the folder, then that season's number in the name
+    ("dl/Rick and Morty (3 season) [Blu-ray Remux 1080p]/Rick and Morty - 301 - The Rickshank Rickdemption.mkv", (3, 1)),
+    ("dl/Rick and Morty (4 season)/Rick and Morty - 410 - Star Mort Rickturn of the Jerri.mkv", (4, 10)),
+    ("series/Rick and Morty/s03/Rick and Morty - 307 - The Ricklantis Mixup.mkv", (3, 7)),
+    ("dl/Show Season 10/Show - 1002 - Title.mkv", (10, 2)),
+    ("dl/Шоу 2 сезон/Шоу 205.mkv", (2, 5)),
+    ("dl/Show.S02.1080p/Show - 205 x264.mkv", (2, 5)),
+    ("dl/Show (3 season)/Show - 301 - 302.mkv", None),
+    ("dl/Show (3 season)/Show - 101.mkv", None),
+    ("dl/Show Season 10/Show.1080p.mkv", None),
+    ("dl/Show (2 season)/Show.x264.mkv", None),
 ])
 def test_episode_of(name, ep):
     assert ce.episode_of(name) == ep

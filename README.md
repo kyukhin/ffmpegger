@@ -68,7 +68,8 @@ folder again only does what is not there yet.
 ## How convert_eng.py picks things
 
 - **Movie or season**: one video is a movie; more are episodes, numbered by
-  `S01E02`, `s01x02` or `1x02` in the file name. Videos with `sample` in the
+  `S01E02`, `s01x02` or `1x02` in the file name, or by `Show - 301 - Title` in
+  a folder that names its season (`s03`, `Season 3`, `(3 season)`, `3 сезон`). Videos with `sample` in the
   path and the output folder are skipped
 - **Subtitles**: an English `.srt` (`en`, `eng`, `english` in its path inside
   the torrent, e.g. `Sub.Eng/` or `Movie.en.srt`) for the same episode; full
