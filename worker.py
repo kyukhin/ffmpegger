@@ -458,14 +458,18 @@ def lower(pids, use, priority):
 
 def ease(library, name, proc, job, eased, priority):
     """Keeps the converter and everything it starts low while the worker is lowered (see lowered), each time
-    also for processes started meanwhile, and puts it back once when not. Returns the CPUs it may use now,
-    None when not lowered."""
+    also for processes started meanwhile, and puts it back once when not. Returns the CPUs it may use now:
+    None when not lowered, [] when lowered but no process could be (it converts on, the heartbeat says so)."""
     use = lowered(library, name)
     if use:
         done = lower(members(proc, job), use, priority)
-        if use != eased:
-            log.info("lowered: idle priority on %d of %d CPUs, %d processes", len(use), len(cpus()), len(done))
-        return use
+        got = use if done else []
+        if got != eased:
+            if done:
+                log.info("lowered: idle priority on %d of %d CPUs, %d processes", len(use), len(cpus()), len(done))
+            else:
+                log.info("lowered, but no process could be")
+        return got
     if eased:
         lower(members(proc, job), None, priority)
         log.info("back to %s priority on every CPU", priority)

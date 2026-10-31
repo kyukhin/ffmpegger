@@ -439,6 +439,9 @@ def test_low_lowers_the_converter_and_its_children(tmp_path):
         eased = worker.ease(lib, "pc", proc, None, None, "normal")
         assert eased == worker.cpus()[-max(1, round(len(worker.cpus()) / 2)):]
         assert {nice(p) for p in worker.members(proc, None)} == {19}
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        assert worker.ease(lib, "pc", gone, None, eased, "normal") == []  # nothing it could lower
         os.remove(jobs.low_file(lib, "pc"))
         assert worker.ease(lib, "pc", proc, None, eased, "normal") is None  # back; nice only for root
     finally:
