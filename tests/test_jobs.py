@@ -116,6 +116,15 @@ def test_labels(tmp_path, monkeypatch):
     assert enqueue.main(args) == 0
     assert ("0unsort/0web/Kids", "web") in [(j["path"], j["profile"]) for _, j in jobs.listing(str(lib), "queue")]
 
+    # The shows in another folder
+    monkeypatch.setenv("TR_TORRENT_DIR", str(lib / "0unsort"))
+    monkeypatch.setenv("TR_TORRENT_NAME", "Show.S01-S02")
+    monkeypatch.setenv("TR_TORRENT_LABELS", "show:Show,convert:web-rus")
+    assert enqueue.main(args + ["--series", "films/0series"]) == 0
+    assert os.path.exists(str(lib / "films" / "0series" / "Show" / "s01" / "Show.S01E01.mkv"))
+    assert ("films/0series/Show/s02", "0conv/web-rus/films/0series/Show/s02") in [
+        (j["path"], j["output"]) for _, j in jobs.listing(str(lib), "queue")]
+
 
 def worker_args(lib, tmp_path):
     return ["--library", str(lib), "--once", "--name", "pc", "--log", str(tmp_path / "worker.log")]

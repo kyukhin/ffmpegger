@@ -3,7 +3,7 @@
 through a small wrapper that passes --library; it can also be run by hand.
 
 The torrent's labels (set by the bot) say what to do, wherever it was downloaded:
-    show:<name>       arrange it into series/<name>/sNN/ (arrange.py)
+    show:<name>       arrange it into series/<name>/sNN/ (arrange.py), --series for another folder
     film[:<title>]    arrange it into films/<title>/
     convert:<profile> queue a conversion, of the arranged season folders when it was arranged;
                       one label per profile
@@ -106,6 +106,7 @@ def main(argv=None):
     p.add_argument("--profiles", default=os.path.join(HERE, "profiles.json"))
     p.add_argument("--profile", help="use this profile whatever the folder")
     p.add_argument("--labels", help="as Transmission's labels, comma separated; default: $TR_TORRENT_LABELS")
+    p.add_argument("--series", default="series", help="the shows' folder in the library, default series")
     p.add_argument("path", nargs="?", help="default: $TR_TORRENT_DIR/$TR_TORRENT_NAME")
     a = p.parse_args(argv)
 
@@ -135,7 +136,8 @@ def main(argv=None):
     if labels["show"] or labels["film"]:
         try:
             record = arrange.arrange(library, path, show=labels["show"], film=bool(labels["film"]),
-                                     title=labels["film"] if isinstance(labels["film"], str) else None)
+                                     title=labels["film"] if isinstance(labels["film"], str) else None,
+                                     series=a.series)
         except (ValueError, OSError) as e:
             log(library, "cannot arrange %s: %s" % (rel, e))
             return 1

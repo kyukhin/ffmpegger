@@ -43,7 +43,8 @@ show meet in one folder; an episode already there from another release is kept
 and the new one reported. English and Russian `.srt` files follow their video as
 `<video>.en.srt`, `<video>.ru.srt`. Each run leaves a record in
 `.convert/arranged/`. By hand: `arrange.py --library /mnt/lib --show NAME PATH`,
-or `enqueue.py --library /mnt/lib --labels "show:NAME,convert:web" PATH`.
+or `enqueue.py --library /mnt/lib --labels "show:NAME,convert:web" PATH`. Both take
+`--series films/0series` to keep the shows in another folder of the library.
 
 ## Profiles
 

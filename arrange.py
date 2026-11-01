@@ -7,6 +7,7 @@ keeps seeding from where it is and the library takes no extra space:
     arrange.py --library /mnt/lib --film /mnt/lib/0unsort/Rio.2011.1080p.BluRay.mkv
         -> films/Rio (2011)/Rio.2011.1080p.BluRay.mkv
 
+--series films/0series puts the shows there instead of series/.
 Episodes go to their season by SxxEyy in the file name, whatever the torrent's
 layout, or by a name like "Show - 301 - Title" in a folder that names season 3. English and Russian .srt files follow their video as <video>.en.srt,
 <video>.ru.srt (.sdh, .forced kept), so the language survives leaving its
@@ -90,8 +91,8 @@ def link(src, dst, record):
     return True
 
 
-def arrange(library, source, show=None, film=False, title=None):
-    """Links the download into series/<show>/sNN/ or films/<title>/; returns the record."""
+def arrange(library, source, show=None, film=False, title=None, series="series"):
+    """Links the download into <series>/<show>/sNN/ or films/<title>/; returns the record."""
     library = os.path.realpath(library)
     source = os.path.realpath(source)
     src_rel = os.path.relpath(source, library).replace(os.sep, "/")
@@ -129,6 +130,7 @@ def arrange(library, source, show=None, film=False, title=None):
 
     if show:
         record["show"] = show = safe(show)
+        record["where"] = posixpath.join(series.strip("/"), show)
         # The torrent's own folder may be what names the season: Show (3 season)/Show - 301 - Title.mkv
         top = os.path.basename(source) if os.path.isdir(source) else ""
         by_episode = {}
@@ -141,7 +143,7 @@ def arrange(library, source, show=None, film=False, title=None):
             if not ep:
                 record["unplaced"].append(rel)
                 continue
-            folder = os.path.join(library, "series", show, "s%02d" % ep[0])
+            folder = os.path.join(library, series, show, "s%02d" % ep[0])
             dst = os.path.join(folder, os.path.basename(full))
             other = holder(folder, ep)
             if other and not os.path.samefile(full, os.path.join(folder, other)):
@@ -155,6 +157,7 @@ def arrange(library, source, show=None, film=False, title=None):
                 record["folders"].append(record["_rel"](folder))
     else:
         record["film"] = title = safe(title or film_title(os.path.basename(source)))
+        record["where"] = "films/" + title
         folder = os.path.join(library, "films", title)
         for full, rel in videos:
             dst = os.path.join(folder, os.path.basename(full))
@@ -177,13 +180,14 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Arrange a download into the library with hardlinks.")
     p.add_argument("--library", required=True, help="library root on this server")
     kind = p.add_mutually_exclusive_group(required=True)
-    kind.add_argument("--show", help="the show's name: its folder in series/")
+    kind.add_argument("--show", help="the show's name: its folder in --series")
     kind.add_argument("--film", action="store_true", help="a film: films/<title>/")
     p.add_argument("--title", help="the film's folder, default from the download's name: Rio (2011)")
+    p.add_argument("--series", default="series", help="the shows' folder in the library, default series")
     p.add_argument("source", help="the finished torrent, a folder or a file")
     a = p.parse_args(argv)
     try:
-        record = arrange(a.library, a.source, show=a.show, film=a.film, title=a.title)
+        record = arrange(a.library, a.source, show=a.show, film=a.film, title=a.title, series=a.series)
     except (ValueError, OSError) as e:
         print("ERR:", e, file=sys.stderr)
         return 2

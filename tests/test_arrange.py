@@ -61,13 +61,14 @@ def test_show_pack(tmp_path):
     # A new season from another torrent joins the same show
     r = arrange.arrange(str(lib), touch(lib / "0unsort" / "S3" / "Show.S03E01.mkv"), show="Show")
     assert r["folders"] == ["series/Show/s03"]
+    assert r["where"] == "series/Show"
 
 
 def test_film(tmp_path):
     lib = tmp_path / "lib"
     movie = touch(lib / "0unsort" / "Rio.2011.1080p.BluRay.x264.mkv")
     r = arrange.arrange(str(lib), movie, film=True)
-    assert r["folders"] == ["films/Rio (2011)"]
+    assert r["folders"] == ["films/Rio (2011)"] and r["where"] == "films/Rio (2011)"
     folder = lib / "0unsort" / "Big.Fish.2003.1080p"
     touch(folder / "Big.Fish.2003.1080p.mkv")
     touch(folder / "Subs" / "2_English.srt")
