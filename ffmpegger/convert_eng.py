@@ -18,6 +18,8 @@ import time
 
 VIDEO_EXTS = (".avi", ".m4v", ".mkv", ".mp4")
 SUBS_EXTS = (".srt",)
+# Audio tracks in files of their own, a dub next to the video: <video>.ru.mka as arrange.py names it
+AUDIO_EXTS = (".mka", ".ac3", ".eac3", ".dts", ".aac", ".m4a", ".flac", ".opus")
 # Subtitle codecs libass can draw. Picture subtitles (PGS, VobSub) it cannot
 TEXT_SUBS = ("subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text")
 # S01E02, s04x03, S01.E02, then 6x01. Only the file name is searched: a folder
@@ -28,6 +30,12 @@ EPISODE = [re.compile(r"s(\d{1,2})[ ._-]?[ex](\d{1,3})", re.IGNORECASE),
 SEASON = [re.compile(r"(?:^|[^a-z])s(\d{1,2})(?![e\d])", re.IGNORECASE),
           re.compile(r"(?:season|сезон)[ ._-]*(\d{1,2})(?!\d)", re.IGNORECASE),
           re.compile(r"(?<!\d)(\d{1,2})(?:st|nd|rd|th|-?й)?[ ._-]*(?:season|сезон)", re.IGNORECASE)]
+# A number without a season, for lectures and the like: Лекция #10, Lecture 10, Серия 3, Part 2,
+# then #10, then a number first: 1-Title, 01. Title (not 2001.A.Space.Odyssey)
+NUMBER = [re.compile(r"\b(?:лекция|lecture|серия|episode|эпизод|часть|part|урок|lesson)[ ._-]*(?:#|№)?[ ._-]*(\d{1,3})(?!\d)",
+                     re.IGNORECASE),
+          re.compile(r"[#№][ ._-]*(\d{1,3})(?!\d)"),
+          re.compile(r"^(\d{1,3})(?=[ ._-])")]
 # en, eng, english as a word, also 2xEng from release names
 ENGLISH = re.compile(r"(?:^|[^a-z])(?:\d+x)?(?:en|eng|english)(?:[^a-z]|$)", re.IGNORECASE)
 # Worse kinds of subtitles: forced has only the foreign bits, SDH adds [door creaks]
@@ -182,8 +190,8 @@ def parse_args(argv=None):
 
     return cfg
 
-def episode_of(path):
-    """(season, episode) from a file name, or None. Without S01E02 in the name, a name like
+def season_episode(path):
+    """(season, episode) when the path names the season, or None. Without S01E02 in the name, a name like
     "Show - 301 - Title.mkv" in a folder of season 3 is s03e01: the season from the nearest folder that
     names one, then exactly one number of that season and two digits in the name (not x264, 1080p)."""
     name = basename(path)
@@ -191,14 +199,39 @@ def episode_of(path):
         m = regex.search(name)
         if m:
             return int(m.group(1)), int(m.group(2))
+    season = folder_season(path)
+    if season is not None:
+        eps = set(re.findall(r"(?<![\dxh])%d(\d{2})(?![\dpi])" % season, name, re.IGNORECASE))
+        return (season, int(eps.pop())) if len(eps) == 1 and season else None
+    return None
+
+def folder_season(path):
+    """The season the nearest folder of path names: s03, Season 3, (3 season), 3 сезон; or None."""
     folder = dirname(path)
     while basename(folder):
         season = next((int(m.group(1)) for m in (r.search(basename(folder)) for r in SEASON) if m), None)
         if season is not None:
-            eps = set(re.findall(r"(?<![\dxh])%d(\d{2})(?![\dpi])" % season, name, re.IGNORECASE))
-            return (season, int(eps.pop())) if len(eps) == 1 and season else None
+            return season
         folder = dirname(folder)
     return None
+
+def number_of(path):
+    """The episode in a file name that names no season: Лекция #10, Lecture 10, 1-Title, 01. Title; or None."""
+    name = splitext(basename(path))[0]
+    for regex in NUMBER:
+        m = regex.search(name)
+        if m:
+            return int(m.group(1))
+    return None
+
+def episode_of(path):
+    """(season, episode) from a file name, or None: season_episode, else a number without a season
+    (number_of) is an episode of the season its folder names, or of season 1."""
+    ep = season_episode(path)
+    if ep:
+        return ep
+    n = number_of(path)
+    return (folder_season(path) or 1, n) if n is not None else None
 
 def clean_name(name):
     """Special characters to dots, runs of dots to one:
@@ -323,8 +356,18 @@ def pick_video(streams):
             return s
     return None
 
-def pick_audio(cfg, streams):
-    """("0:N", why) or (None, why)."""
+def external_audio(cfg, video):
+    """An audio file next to the video in the wanted language: <video>.ru.mka, <video>.rus.ac3; or None."""
+    stem, lang = splitext(video)[0], cfg["audio_lang"]
+    for code in dict.fromkeys((lang[:2], lang)):
+        for ext in AUDIO_EXTS:
+            if os.path.isfile(stem + "." + code + ext):
+                return stem + "." + code + ext
+    return None
+
+def pick_audio(cfg, streams, external=None):
+    """("0:N", why), ("1:a:0", why) for the external audio file, or (None, why). A track tagged with the
+    language first, then --audio_enforce, then the external file, then a guess among untagged tracks."""
     audio = [s for s in streams if s.get("codec_type") == "audio"]
     lang = cfg["audio_lang"]
     for s in audio:
@@ -334,6 +377,9 @@ def pick_audio(cfg, streams):
     if cfg["audio_enforce"] != -1:
         print("INF: enforcing track", cfg["audio_enforce"])
         return "0:%d" % cfg["audio_enforce"], "enforced"
+    if external:
+        print("INFO: OK: %s audio in a file of its own: %s" % (lang, external))
+        return "1:a:0", "external " + basename(external)
     # Without tags (.avi) English is usually the second track, Russian the first
     nth = 1 if lang == "eng" else 0
     if len(audio) <= nth:
@@ -486,14 +532,17 @@ def convert_one(cfg, e):
         if burn:
             print("INFO: OK: subtitles", item["subtitles"])
 
+    ext_audio = None
     if cfg["a_stream"]:
         astream, item["audio"] = cfg["a_stream"], "set explicitly"
     else:
-        astream, item["audio"] = pick_audio(cfg, streams)
+        astream, item["audio"] = pick_audio(cfg, streams, external_audio(cfg, video))
+        if astream == "1:a:0":
+            ext_audio = external_audio(cfg, video)
     if not astream:
         print("ERR: no audio stream defined or guessed:", item["audio"])
         return dict(item, status="skipped", reason=item["audio"])
-    print("INFO: OK: found audio track inside video file", astream)
+    print("INFO: OK: audio track", astream, item["audio"])
 
     try:
         vf = video_filters(cfg, v.get("width") or 0, v.get("height") or 0)
@@ -507,11 +556,13 @@ def convert_one(cfg, e):
     os.makedirs(dirname(out), exist_ok=True)
     started = time.time()
     with tempfile.TemporaryDirectory(prefix="ffmpegger-") as tmp:
-        src, subs_src = video, ext_subs
+        src, subs_src, audio_src = video, ext_subs, ext_audio
         if cfg["local_copy"]:
             src = local_copy(video, tmp)
             if ext_subs and src != video:
                 subs_src = local_copy(ext_subs, tmp)
+            if ext_audio and src != video:
+                audio_src = local_copy(ext_audio, tmp)
         if burn:
             subs = ("subtitles=filename=" + filter_path(subs_src) if ext_subs
                     else "subtitles=filename=%s:si=%d" % (filter_path(src), si))
@@ -519,7 +570,7 @@ def convert_one(cfg, e):
         if cfg["verbose"]: print("DBG: video filter setting:", vf)
 
         common = ["ffmpeg", "-hide_banner", "-nostdin", "-y",
-                  "-i", src,
+                  "-i", src, *(["-i", audio_src] if ext_audio else []),
                   # Video setting
                   "-map", "0:%d" % v["index"], "-c:v", "libx264",
                   # 8 bits: from a 10-bit source x264 makes High 10, which phones,

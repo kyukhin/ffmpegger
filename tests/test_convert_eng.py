@@ -89,6 +89,13 @@ def tree_hash(root, skip):
     ("dl/Show (3 season)/Show - 101.mkv", None),
     ("dl/Show Season 10/Show.1080p.mkv", None),
     ("dl/Show (2 season)/Show.x264.mkv", None),
+    # Lectures and the like, numbered without a season: season 1, or the one the folder names
+    ("dl/Стэнфорд/Биология поведения человека Лекция #10. Введение, I [Роберт Сапольски, 2010. Стэнфорд].mkv", (1, 10)),
+    ("dl/Course/1-Robert Sapolsky's Human Behavioral Biology Introduction.mkv", (1, 1)),
+    ("dl/Course/Lecture 7 - Title.mkv", (1, 7)),
+    ("dl/Show Season 2/01. Title.mkv", (2, 1)),
+    ("series/HBB/s02/16-Advanced Topics in Neuroendocrinology II.mkv", (2, 16)),
+    ("2001.A.Space.Odyssey.1968.mkv", None),
 ])
 def test_episode_of(name, ep):
     assert ce.episode_of(name) == ep
@@ -143,6 +150,9 @@ def test_pick_audio():
     assert ce.pick_audio(cfg(audio_lang="rus"), untagged)[0] == "0:1"
     assert ce.pick_audio(cfg(audio_enforce=1), untagged)[0] == "0:1"
     assert ce.pick_audio(cfg(), [stream(0, "video"), stream(1, "audio")])[0] is None
+    # A dub in a file of its own beats a guess among untagged tracks, not a tagged one
+    assert ce.pick_audio(cfg(audio_lang="rus"), untagged, "x.ru.mka")[0] == "1:a:0"
+    assert ce.pick_audio(cfg(audio_lang="rus"), tagged, "x.ru.mka")[0] == "0:1"
 
 
 def test_pick_subtitles():
@@ -216,6 +226,22 @@ def test_season_converts_resumes_and_keeps_sources(tmp_path):
     assert ce.main(args) == 0
     r = json.load(open(report))
     assert r["total"] == 2 and r["counts"]["exists"] == 2
+
+
+@needs_ffmpeg
+def test_external_audio(tmp_path):
+    """English inside without a tag, the Russian dub next to it as arrange.py names it."""
+    root = tmp_path / "s02"
+    for n in (1, 2):
+        make_video(root / ("%d-Lecture.mkv" % n), audio=("",), subs=())
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=8000",
+                    "-t", "1", "-c:a", "aac", str(root / "1-Lecture.ru.mka")], check=True)
+    out, report = str(tmp_path / "0out"), str(tmp_path / "report.json")
+    assert ce.main(["-d", str(root), "-o", out, "-f", "-s", "50", "--audio_lang=rus", "--subtitles_disabled",
+                    "-r", report]) == 0
+    audio = {e["video"]: e["audio"] for e in json.load(open(report))["videos"]}
+    assert audio == {"1-Lecture.mkv": "external 1-Lecture.ru.mka", "2-Lecture.mkv": "track 1 of 1, untagged"}
+    assert sorted(os.listdir(out)) == ["1-Lecture.mp4", "2-Lecture.mp4"]
 
 
 @needs_ffmpeg

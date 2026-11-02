@@ -64,6 +64,25 @@ def test_show_pack(tmp_path):
     assert r["where"] == "series/Show"
 
 
+def test_lectures(tmp_path):
+    """Numbered without a season, in two folders, the dub of the second in files of its own."""
+    lib = tmp_path / "lib"
+    pack = lib / "0unsort" / "Стэнфорд. Лекция Биология"
+    touch(pack / "Биология Лекция #2. Эволюция [2010].mkv")
+    touch(pack / "Биология Лекция #1. Введение [2010].mkv")
+    yt = pack / "Версия для YouTube 2024"
+    touch(yt / "1-Introduction.mkv")
+    touch(yt / "2-Evolution of Behavior I.mkv")
+    touch(yt / "Биология [Нейронка RUS]" / "1-Introduction 1. Введение..mka")
+    touch(yt / "Биология [Нейронка RUS]" / "2-Evolution of Behavior I 2. Эволюция поведения I..mka")
+    r = arrange.arrange(str(lib), str(pack), show="HBB", series="films/0series")
+    assert r["folders"] == ["films/0series/HBB/s01", "films/0series/HBB/s02"] and not r["unplaced"]
+    assert tree(lib / "films" / "0series") == [
+        "HBB/s01/Биология Лекция #1. Введение [2010].mkv", "HBB/s01/Биология Лекция #2. Эволюция [2010].mkv",
+        "HBB/s02/1-Introduction.mkv", "HBB/s02/1-Introduction.ru.mka",
+        "HBB/s02/2-Evolution of Behavior I.mkv", "HBB/s02/2-Evolution of Behavior I.ru.mka"]
+
+
 def test_film(tmp_path):
     lib = tmp_path / "lib"
     movie = touch(lib / "0unsort" / "Rio.2011.1080p.BluRay.x264.mkv")

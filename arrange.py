@@ -9,9 +9,13 @@ keeps seeding from where it is and the library takes no extra space:
 
 --series films/0series puts the shows there instead of series/.
 Episodes go to their season by SxxEyy in the file name, whatever the torrent's
-layout, or by a name like "Show - 301 - Title" in a folder that names season 3. English and Russian .srt files follow their video as <video>.en.srt,
-<video>.ru.srt (.sdh, .forced kept), so the language survives leaving its
-Subs/English/ folder. Files already there are skipped; files without an episode
+layout, or by a name like "Show - 301 - Title" in a folder that names season 3.
+Lectures and the like, numbered without a season (Лекция #10, Lecture 10,
+1-Title, 01. Title), go to the season their folder names, else each folder of
+them is a season of its own: the shallowest first, then by name. English and
+Russian .srt files follow their video as <video>.en.srt, <video>.ru.srt (.sdh,
+.forced kept), so the language survives leaving its Subs/English/ folder; audio
+files (a dub in .mka, .ac3 ...) as <video>.ru.mka. Files already there are skipped; files without an episode
 number are reported, not guessed. A record of what went where is written to
 .convert/arranged/<id>.json for the bot. See README.md."""
 
@@ -22,7 +26,8 @@ import re
 import sys
 
 from ffmpegger import jobs
-from ffmpegger.convert_eng import ENGLISH, FORCED, SAMPLE, SDH, SUBS_EXTS, VIDEO_EXTS, episode_of
+from ffmpegger.convert_eng import (AUDIO_EXTS, ENGLISH, FORCED, SAMPLE, SDH, SUBS_EXTS, VIDEO_EXTS, episode_of,
+                                   folder_season, number_of, season_episode)
 
 RUSSIAN = re.compile(r"(?:^|[^a-z])(?:ru|rus|russian)(?:[^a-z]|$)", re.IGNORECASE)
 YEAR = re.compile(r"[ ._(\[-]((?:19|20)\d{2})(?=[ ._)\]-]|$)")
@@ -46,10 +51,11 @@ def film_title(name):
 
 
 def files_of(source):
-    """(videos, subtitles) under source as (path, path inside the torrent); a file is its own torrent."""
+    """(videos, subtitles, audio files) under source as (path, path inside the torrent); a file is its
+    own torrent."""
     if not os.path.isdir(source):
-        return [(source, os.path.basename(source))], []
-    videos, subs = [], []
+        return [(source, os.path.basename(source))], [], []
+    videos, subs, audio = [], [], []
     for path, dirs, files in os.walk(source):
         dirs.sort()
         for fn in sorted(files):
@@ -59,21 +65,23 @@ def files_of(source):
                 videos.append((full, rel))
             elif fn.lower().endswith(SUBS_EXTS):
                 subs.append((full, rel))
-    return videos, subs
+            elif fn.lower().endswith(AUDIO_EXTS):
+                audio.append((full, rel))
+    return videos, subs, audio
+
+
+def language_of(rel):
+    """en or ru from the path inside the torrent ([Нейронка RUS]/…, Sub.Eng/…), or None."""
+    return "en" if ENGLISH.search(rel) else "ru" if RUSSIAN.search(rel) else None
 
 
 def subtitle_suffix(rel):
     """.en, .en.sdh, .ru.forced ... from the path inside the torrent, or None for other languages."""
-    lang = "en" if ENGLISH.search(rel) else "ru" if RUSSIAN.search(rel) else None
+    lang = language_of(rel)
     if not lang:
         return None
     name = os.path.join(os.path.basename(os.path.dirname(rel)), os.path.basename(rel))
     return "." + lang + (".forced" if FORCED.search(name) else ".sdh" if SDH.search(name) else "")
-
-
-def subtitle_episode(rel):
-    """SxxEyy of a subtitle: its file name, else its folder (Subs/S01E02/English.srt)."""
-    return episode_of(rel) or episode_of(os.path.dirname(rel) or "")
 
 
 def link(src, dst, record):
@@ -100,22 +108,24 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
         raise ValueError("%s is outside the library %s" % (source, library))
     if bool(show) == bool(film):
         raise ValueError("arrange either a show or a film")
-    videos, subs = files_of(source)
+    videos, subs, audio = files_of(source)
     record = {"id": jobs.new_id(src_rel + "|" + (show or "film")), "time": jobs.now(), "source": src_rel,
               "placed": [], "there": [], "clash": [], "unplaced": [], "folders": [],
               "_rel": lambda p: os.path.relpath(p, library).replace(os.sep, "/")}
 
     def add_subs(video_dst, matching):
+        """The subtitles and audio files of a video next to it: <video>.en.srt, <video>.ru.mka."""
         stem = os.path.splitext(video_dst)[0]
         used = set()
         for full, rel in matching:
-            suffix = subtitle_suffix(rel)
-            if not suffix:
+            ext = os.path.splitext(rel)[1].lower()
+            suffix = subtitle_suffix(rel) if ext in SUBS_EXTS else "." + (language_of(rel) or "")
+            if suffix in (None, "."):
                 continue
-            n, name = 1, stem + suffix + ".srt"
+            n, name = 1, stem + suffix + ext
             while name in used or (os.path.lexists(name) and not os.path.samefile(full, name)):
                 n += 1
-                name = "%s%s.%d.srt" % (stem, suffix, n)
+                name = "%s%s.%d%s" % (stem, suffix, n, ext)
             used.add(name)
             link(full, name, record)
 
@@ -133,13 +143,42 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
         record["where"] = posixpath.join(series.strip("/"), show)
         # The torrent's own folder may be what names the season: Show (3 season)/Show - 301 - Title.mkv
         top = os.path.basename(source) if os.path.isdir(source) else ""
+        # Numbered without a season (Лекция #10, 1-Title): the season its folder names, else each folder
+        # of them a season of its own, after the seasons named in the torrent
+        named = {season_episode(os.path.join(top, rel)) for _, rel in videos} - {None}
+        folders = sorted({os.path.dirname(rel) for _, rel in videos
+                          if not season_episode(os.path.join(top, rel)) and number_of(rel) is not None},
+                         key=lambda d: (d.count(os.sep) if d else -1, d))
+        seasons, used, n = {}, {ep[0] for ep in named}, 0
+        for d in folders:
+            season = folder_season(os.path.join(top, d, "x"))
+            if season is None:
+                n += 1
+                while n in used:
+                    n += 1
+                season = n
+            seasons[d] = season
+            used.add(season)
+
+        def episode(rel):
+            """The episode of a video, subtitle or audio file: named, else its number in the season of
+            the nearest folder of numbered videos it is in."""
+            ep = season_episode(os.path.join(top, rel))
+            if ep or number_of(rel) is None:
+                return ep
+            d = os.path.dirname(rel)
+            while d not in seasons and d:
+                d = os.path.dirname(d)
+            return (seasons[d], number_of(rel)) if d in seasons else None
+
         by_episode = {}
-        for full, rel in subs:
-            ep = subtitle_episode(os.path.join(top, rel))
+        for full, rel in subs + audio:
+            # A subtitle's folder may name its episode: Subs/S01E02/English.srt
+            ep = episode(rel) or season_episode(os.path.join(top, os.path.dirname(rel)))
             if ep:
                 by_episode.setdefault(ep, []).append((full, rel))
         for full, rel in videos:
-            ep = episode_of(os.path.join(top, rel))
+            ep = episode(rel)
             if not ep:
                 record["unplaced"].append(rel)
                 continue
@@ -163,7 +202,7 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
             dst = os.path.join(folder, os.path.basename(full))
             link(full, dst, record)
             if len(videos) == 1:
-                add_subs(dst, subs)
+                add_subs(dst, subs + audio)
         if videos:
             record["folders"].append(record["_rel"](folder))
     record["folders"].sort()
