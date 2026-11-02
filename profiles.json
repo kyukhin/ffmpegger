@@ -19,6 +19,11 @@
    "about": "as web, cropped and scaled to the car's 1920x700 screen",
    "args": ["--size_target=1600", "--video_fit=1920x700", "--settings_subtitles=force_style='Fontsize=40'"]
   },
+  "bmw-rus": {
+   "folder": "0unsort/0bmw-rus",
+   "about": "as bmw, Russian audio, no subtitles",
+   "args": ["--size_target=1600", "--video_fit=1920x700", "--subtitles_disabled", "--audio_lang=rus"]
+  },
   "ipad-rus": {
    "folder": "0unsort/0ipad-rus",
    "about": "Russian audio, no subtitles, small, at most 720p",
