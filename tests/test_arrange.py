@@ -92,8 +92,31 @@ def test_film(tmp_path):
     touch(folder / "Big.Fish.2003.1080p.mkv")
     touch(folder / "Subs" / "2_English.srt")
     arrange.arrange(str(lib), str(folder), film=True)
-    assert tree(lib / "films") == ["Big Fish (2003)/Big.Fish.2003.1080p.en.srt", "Big Fish (2003)/Big.Fish.2003.1080p.mkv",
-                                   "Rio (2011)/Rio.2011.1080p.BluRay.x264.mkv"]
+    assert tree(lib / "films") == ["Big Fish (2003)/Big.Fish.2003.en.srt", "Big Fish (2003)/Big.Fish.2003.mkv",
+                                   "Rio (2011)/Rio.2011.mkv"]
+
+
+def test_names_lose_release_junk(tmp_path):
+    lib = tmp_path / "lib"
+    pack = lib / "0unsort" / "Show.S01.1080p.WEB-DL"
+    touch(pack / "Show.S01E01.1080p.WEB-DL.Rus.Eng.mkv")
+    touch(pack / "Show.S01E02.1080p.WEB-DL.Rus.Eng.mkv")
+    touch(pack / "Subs" / "Eng" / "Show.S01E01.1080p.WEB-DL.Rus.Eng.srt")
+    # S01E02 is there already under the name it had before names were cleaned: not again
+    old = lib / "films" / "0series" / "Show" / "s01" / "Show.S01E02.1080p.WEB-DL.Rus.Eng.mkv"
+    os.makedirs(str(old.parent))
+    os.link(str(pack / "Show.S01E02.1080p.WEB-DL.Rus.Eng.mkv"), str(old))
+    r = arrange.arrange(str(lib), str(pack), show="Show", series="films/0series")
+    assert tree(lib / "films") == ["0series/Show/s01/Show.S01E01.en.srt", "0series/Show/s01/Show.S01E01.mkv",
+                                   "0series/Show/s01/Show.S01E02.1080p.WEB-DL.Rus.Eng.mkv"]
+    assert r["there"] == ["films/0series/Show/s01/Show.S01E02.1080p.WEB-DL.Rus.Eng.mkv"]
+    # Lectures of a season with ten and more get leading zeros, so that they sort
+    course = lib / "0unsort" / "Course"
+    for n in range(1, 11):
+        touch(course / ("Лекция #%d. Тема [2010].mkv" % n))
+    arrange.arrange(str(lib), str(course), show="Course", series="films/0series")
+    assert sorted(os.listdir(str(lib / "films" / "0series" / "Course" / "s01")))[:2] == [
+        "Лекция #01. Тема [2010].mkv", "Лекция #02. Тема [2010].mkv"]
 
 
 def test_cli_writes_a_record(tmp_path):

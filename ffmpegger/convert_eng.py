@@ -43,6 +43,22 @@ FORCED = re.compile(r"forced", re.IGNORECASE)
 SDH = re.compile(r"(?:^|[^a-z])(?:sdh|hi|cc)(?:[^a-z]|$)", re.IGNORECASE)
 SAMPLE = re.compile(r"(?:^|[^a-z])sample(?:[^a-z]|$)", re.IGNORECASE)
 BAD_CHARS = [' ', '(', ')', '[', ']', '\'', '«', '»', ',', '’']
+# Release junk in a file name, word by word: from the first one after the title and the episode on, the
+# rest of the name goes. Quality, source, service, codec, audio, dub, release groups and sites
+JUNK = re.compile(r"""\d{3,4}[pi] | [48]k | uhd | web-?dl(?:rip)? | web-?rip | [bh]d-?rip | br-?rip | blu-?ray
+    | bd-?remux | remux | hdtv(?:rip)? | dvd-?rip | dvd[59] | sat-?rip | tv-?rip | hd-?rip
+    | amzn | hmax | dsnp | atvp | nf | [xh]\.?26[45] | hevc | avc | xvid | divx | 10-?bit | sdr | hdr(?:10)?\+?
+    | aac[\d.]* | e?ac-?3 | ddp | ddp?\+?\d(?:\.\d)? | dts(?:-hd)? | truehd | atmos | flac
+    | \d+x(?:rus|eng|ukr) | mvo | dvo | avo | subs | repack | proper
+    | teamhd | rgzsrutracker | rutracker | rutor | nnmclub | hdclub | kvk | casstudio | goblin | aktep | lostfilm
+    | newstudio | baibako | coldfilm | alexfilm | kubik | multreactor | filiza | dfcbit""", re.IGNORECASE | re.VERBOSE)
+# Junk only before more junk or at the end: Rus.Eng.TeamHD, by.AKTEP, but Charlotte's Web
+WEAK = re.compile(r"web|dvd|sat|rus|eng|ukr|multi|by", re.IGNORECASE)
+# The end of a site's name in brackets: [rutracker.org]
+SITE = re.compile(r"ru|org|com|net|tv|info|me|su|to", re.IGNORECASE)
+# The words of a name; H.264 and DD5.1 are one word each
+WORD = re.compile(r"[hx]\.26[45]|ddp?\+?\d\.\d|[^\s._\[\](){},;]+", re.IGNORECASE)
+BRACKETS = re.compile(r"\[[^\[\]]*\]|\([^()]*\)")
 
 def parse_resolution(resolution):
     try:
@@ -91,7 +107,8 @@ def parse_args(argv=None):
                         type=str)
 
     parser.add_argument("-f", "--fixup_names",
-                        help="Remove special characters from output file names. Source files are never renamed.",
+                        help="Output file names without release junk (1080p, WEB-DL, the group) and special "
+                             "characters. Source files are never renamed.",
                         action="store_true")
 
     parser.add_argument("-ae", "--audio_enforce",
@@ -239,6 +256,70 @@ def clean_name(name):
     for char in BAD_CHARS:
         name = name.replace(char, '.')
     return re.sub(r'\.\.+', '.', name).lstrip('.')
+
+def junk(word, weak=False):
+    """Whether a word of a name is release junk: 1080p, WEB-DL, x264-GROUP; with weak, also Rus, Web."""
+    return bool(JUNK.fullmatch(word) or JUNK.fullmatch(word.split("-")[0]) or weak and WEAK.fullmatch(word))
+
+def numbered(name):
+    """The episode in a name numbered without a season (Лекция #5, 1-Title), or None."""
+    return None if any(r.search(name) for r in EPISODE) else number_of(name + ".x")
+
+def number_width(names):
+    """Digits for the episodes of names numbered without a season, so that they sort: 2 for Лекция #5 …
+    Лекция #12; None when nothing needs padding."""
+    numbers = [n for n in map(numbered, names) if n is not None]
+    return len(str(max(numbers))) if numbers and max(numbers) >= 10 else None
+
+def tidy_name(stem, width=None):
+    """A name without its release junk, no extension:
+    The.Big.Bang.Theory.S03E06.1080p.BluRay.Rus.Eng.TeamHD -> The.Big.Bang.Theory.S03E06,
+    How to Train Your Dragon (IMAX) 2025  BDRip,720p -> How to Train Your Dragon (IMAX) 2025.
+    Brackets go when they hold junk only: [HDCLUB], [rutracker.org]. Nothing before the episode goes,
+    nor the last word of the title. With width, the episode of a name numbered without a season gets
+    leading zeros: Лекция #5 -> Лекция #05."""
+    def all_junk(m):
+        words = WORD.findall(m.group(0))
+        return words and all(junk(w, weak=True) or SITE.fullmatch(w) for w in words)
+
+    name = BRACKETS.sub(lambda m: "" if all_junk(m) else m.group(0), stem)
+    marker = next((m for r in EPISODE + NUMBER for m in [r.search(name)] if m), None)
+    words = list(WORD.finditer(name))
+    title = False
+    for i, w in enumerate(words):
+        if w.start() < (marker.end() if marker else 0):
+            title = True
+            continue
+        if title and junk(w.group()):
+            name = name[:w.start()]
+            break
+        if title and junk(w.group(), weak=True):
+            # Weak junk counts when the first word after it that is not weak junk is junk, or none is
+            after = next((v.group() for v in words[i + 1:] if not WEAK.fullmatch(v.group())), None)
+            if after is None or junk(after):
+                name = name[:w.start()]
+                break
+        title = title or not junk(w.group(), weak=True)
+    name = re.sub(r"\.{2,}", ".", re.sub(r" {2,}", " ", name)).strip(" ._-,;")
+    if not name:
+        return stem
+    for left, right in ("()", "[]"):
+        # Cut inside brackets: Title (2019, 1080p) -> Title (2019)
+        if name.count(left) > name.count(right):
+            name += right
+    if width and numbered(name) is not None:
+        m = next(m for r in NUMBER for m in [r.search(name)] if m)
+        name = name[:m.start(1)] + m.group(1).zfill(width) + name[m.end(1):]
+    return name
+
+def tidy_file(name, width=None):
+    """tidy_name of a file name, the extension kept."""
+    stem, ext = splitext(name)
+    return tidy_name(stem, width) + ext
+
+def title_of(stem):
+    """What a player shows for a file: its name, dots and underscores as spaces when it has no spaces."""
+    return stem if " " in stem else re.sub(r"[._]+", " ", stem).strip()
 
 def filter_path(path):
     """A path as a value inside -vf. ffmpeg unescapes it twice, first as a
@@ -484,11 +565,34 @@ def run_ffmpeg(cmd):
     print("\n".join(tail))
     return tail[-1] if tail else "exit code %d" % proc.returncode
 
+def output_stem(cfg, video, width=None):
+    """(name without extension, title) of a video's result: with --fixup_names without release junk
+    (tidy_name), the title without it always."""
+    stem = splitext(basename(video))[0]
+    tidy = tidy_name(stem, width)
+    return (tidy if cfg["fixup_names"] else stem), title_of(tidy)
+
+def output_stems(cfg, videos):
+    """output_stem of each video, the episodes of a folder numbered without a season padded alike. Two
+    videos of a folder that would get one name keep theirs."""
+    folders = {}
+    for v in videos:
+        folders.setdefault(dirname(v), []).append(v)
+    names = {}
+    for vs in folders.values():
+        width = number_width([splitext(basename(v))[0] for v in vs])
+        got = {v: output_stem(cfg, v, width) for v in vs}
+        taken = [stem.lower() for stem, _ in got.values()]
+        for v, (stem, title) in got.items():
+            names[v] = (stem, title) if taken.count(stem.lower()) == 1 else (splitext(basename(v))[0], title)
+    return names
+
 def convert_one(cfg, e):
     """Converts one video. Returns its report entry: status converted,
     exists (done before), skipped (no subtitles or audio) or failed."""
     video, ext_subs = e[2], e[3]
-    name = splitext(basename(video))[0] + ".mp4"
+    stem, title = cfg.get("names", {}).get(video) or output_stem(cfg, video)
+    name = stem + ".mp4"
     if cfg["fixup_names"]:
         name = clean_name(name)
     root = cfg["root_dir"] if isdir(cfg["root_dir"]) else dirname(cfg["root_dir"]) or "."
@@ -580,7 +684,9 @@ def convert_one(cfg, e):
                   "-map", astream, "-c:a", "aac",
                   # TODO: extract into param. These key turns sound into stereo
                   # from, say 5.1. Nothing but mono/stereo can be played on iPhone
-                  "-ac", "2"]
+                  "-ac", "2",
+                  # What the car and players show instead of the release's "1x10 - Release by ..."
+                  "-metadata", "title=" + title]
         if vf:
             common += ["-vf", ",".join(vf)]
 
@@ -647,6 +753,7 @@ def main(argv=None):
         print("INFO: videos list length: ", len(v_list))
 
     e_list = analyze_episodes(cfg, v_list, s_list)
+    cfg["names"] = output_stems(cfg, v_list)
     if cfg["test_mode"]:
         print("INFO: Test mode, converting single video")
         e_list = e_list[:1]

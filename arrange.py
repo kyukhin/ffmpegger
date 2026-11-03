@@ -5,7 +5,7 @@ keeps seeding from where it is and the library takes no extra space:
     arrange.py --library /mnt/lib --show "Better Call Saul" /mnt/lib/0unsort/BCS.S01-S02.1080p
         -> series/Better Call Saul/s01/..., series/Better Call Saul/s02/...
     arrange.py --library /mnt/lib --film /mnt/lib/0unsort/Rio.2011.1080p.BluRay.mkv
-        -> films/Rio (2011)/Rio.2011.1080p.BluRay.mkv
+        -> films/Rio (2011)/Rio.2011.mkv
 
 --series films/0series puts the shows there instead of series/.
 Episodes go to their season by SxxEyy in the file name, whatever the torrent's
@@ -16,7 +16,8 @@ them is a season of its own: the shallowest first, then by name. English and
 Russian .srt files follow their video as <video>.en.srt, <video>.ru.srt (.sdh,
 .forced kept), so the language survives leaving its Subs/English/ folder; audio
 files (a dub in .mka, .ac3 ...) as <video>.ru.mka. Files already there are skipped; files without an episode
-number are reported, not guessed. A record of what went where is written to
+number are reported, not guessed. Names lose their release junk (convert_eng.tidy_name), lectures
+get leading zeros when a season has ten and more. A record of what went where is written to
 .convert/arranged/<id>.json for the bot. See README.md."""
 
 import argparse
@@ -27,7 +28,7 @@ import sys
 
 from ffmpegger import jobs
 from ffmpegger.convert_eng import (AUDIO_EXTS, ENGLISH, FORCED, SAMPLE, SDH, SUBS_EXTS, VIDEO_EXTS, episode_of,
-                                   folder_season, number_of, season_episode)
+                                   folder_season, number_of, number_width, season_episode, tidy_file)
 
 RUSSIAN = re.compile(r"(?:^|[^a-z])(?:ru|rus|russian)(?:[^a-z]|$)", re.IGNORECASE)
 YEAR = re.compile(r"[ ._(\[-]((?:19|20)\d{2})(?=[ ._)\]-]|$)")
@@ -171,6 +172,13 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
                 d = os.path.dirname(d)
             return (seasons[d], number_of(rel)) if d in seasons else None
 
+        # Names without release junk, the episodes of a season numbered without one padded alike
+        stems = {}
+        for full, rel in videos:
+            if episode(rel):
+                stems.setdefault(episode(rel)[0], []).append(os.path.splitext(os.path.basename(full))[0])
+        widths = {season: number_width(names) for season, names in stems.items()}
+
         by_episode = {}
         for full, rel in subs + audio:
             # A subtitle's folder may name its episode: Subs/S01E02/English.srt
@@ -183,14 +191,17 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
                 record["unplaced"].append(rel)
                 continue
             folder = os.path.join(library, series, show, "s%02d" % ep[0])
-            dst = os.path.join(folder, os.path.basename(full))
+            dst = os.path.join(folder, tidy_file(os.path.basename(full), widths.get(ep[0])))
             other = holder(folder, ep)
             if other and not os.path.samefile(full, os.path.join(folder, other)):
                 # Another release of the same episode is there already: keep it, say so
                 record["clash"].append("%s (s%02d has %s)" % (rel, ep[0], other))
                 continue
+            if other:
+                # There already, maybe under the name it had before names were cleaned
+                dst = os.path.join(folder, other)
             link(full, dst, record)
-            episodes_in[folder][ep] = os.path.basename(full)
+            episodes_in[folder][ep] = os.path.basename(dst)
             add_subs(dst, by_episode.get(ep, []))
             if record["_rel"](folder) not in record["folders"]:
                 record["folders"].append(record["_rel"](folder))
@@ -199,7 +210,7 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
         record["where"] = "films/" + title
         folder = os.path.join(library, "films", title)
         for full, rel in videos:
-            dst = os.path.join(folder, os.path.basename(full))
+            dst = os.path.join(folder, tidy_file(os.path.basename(full)))
             link(full, dst, record)
             if len(videos) == 1:
                 add_subs(dst, subs + audio)

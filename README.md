@@ -22,7 +22,7 @@ Transmission done ──▶ enqueue.py ─┬─ arrange.py ──▶ series/<Sh
 | `ffmpegger/jobs.py` | both | the queue layout |
 | `profiles.json` | the torrent server | folder → `convert_eng.py` arguments |
 | `install-windows.ps1` | the desktop | Python, ffmpeg, share password, logon task |
-| `cleanup-names.sh`, `inject-titles.sh` | by hand | strip release junk from names, put file names into MP4 titles |
+| `cleanup-names.py` | by hand, the torrent server | takes release junk out of the names already there, the converted results and their MP4 titles along; any folder of videos too |
 | `transmission-invoke-convert.sh`, `convert-remote.sh` | old | the previous push over ssh/rsync to a Linux VM; removed once the queue has converted a season |
 
 ## Labels
@@ -40,7 +40,8 @@ was downloaded:
 Arranging uses hardlinks: no extra space, the torrent keeps seeding from where
 it is, deleting the torrent leaves the library alone. Several torrents of one
 show meet in one folder; an episode already there from another release is kept
-and the new one reported. English and Russian `.srt` files follow their video as
+and the new one reported. Names lose their release junk on the way, see
+[Names](#names). English and Russian `.srt` files follow their video as
 `<video>.en.srt`, `<video>.ru.srt`, audio files (a dub in `.mka`, `.ac3`, …) as
 `<video>.ru.mka`, the language from the path inside the torrent (`[Нейронка
 RUS]/…`). Each run leaves a record in
@@ -65,9 +66,49 @@ deepest matching folder wins.
 Results go to `0conv/<profile>/` plus the source's path, with its subfolders:
 `series/Better Call Saul/s01` converts into `0conv/bmw/series/Better Call Saul/s01/`,
 a download into `0unsort/0web/Show.S01` into `0conv/web/Show.S01/` (the profile or
-downloads folder is dropped). Special characters in file names become dots. The
-sources are never changed, so Transmission keeps seeding them, and converting a
-folder again only does what is not there yet.
+downloads folder is dropped). With `-f` (all profiles) file names lose their
+release junk and special characters become dots; the MP4 title is the clean
+name always. The sources are never changed, so Transmission keeps seeding them,
+and converting a folder again only does what is not there yet.
+
+## Names
+
+The car and players show a file's name or its title, and a release's are full
+of junk: `The.Big.Bang.Theory.S03E06.1080p.BluRay.Rus.Eng.TeamHD.mkv` titled
+"The Big Bang Theory 1x10 - Release serial_M". One function,
+`convert_eng.tidy_name`, cleans them up everywhere:
+
+| Where | Does |
+|---|---|
+| `arrange.py` | puts episodes and films into the library under clean names, their `.srt` and `.mka` along: `The.Big.Bang.Theory.S03E06.mkv` |
+| `convert_eng.py -f` | names the result after the clean name, `-metadata title` "The Big Bang Theory S03E06" (the title also without `-f`) |
+| `cleanup-names.py` | the same for what is there already, see below |
+
+Everything from the first junk word after the title and the episode goes:
+quality (`1080p`), source (`WEB-DL`, `BDRip`, `HMAX`), codec (`x264`, `HEVC`),
+audio (`DD5.1`), dubs (`2xRus`), groups and sites (`TeamHD`, `by.AKTEP`,
+`[rutracker.org]`). Words count whole, so "Engagement" keeps its "Eng";
+`Rus`, `Eng`, `Web` count only before more junk or at the end, so "Charlotte's
+Web (2006)" stays. Brackets go when they hold nothing but junk. Lectures and
+the like numbered without a season get leading zeros when a folder has ten or
+more, so that they sort: `Лекция #5` → `Лекция #05`, `1-Title` → `01-Title`.
+Two videos of a folder that would get one name keep theirs.
+
+`cleanup-names.py` brings what is there already in line, the library and the
+results converted from it in every profile's folder:
+
+```
+cleanup-names.py --library /mnt/lib --profiles ~/ffmpegger/profiles.json --dry-run films/0series
+cleanup-names.py --library /mnt/lib --profiles ~/ffmpegger/profiles.json films/0series
+cleanup-names.py /Volumes/usb/films          # any folder: names, and titles of its MP4s
+```
+
+It renames the results first and the videos after, so a run cut short is
+finished by running it again. A name taken already is left alone and reported
+(exit code 1). A file with another hard link, a torrent's file in the library,
+is renamed but never written to, so it keeps seeding. The library's downloads
+and output folders are not walked. Titles are set in place with mutagen
+(`python3-mutagen`), without copying the video.
 
 ## How convert_eng.py picks things
 

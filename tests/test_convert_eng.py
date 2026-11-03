@@ -101,6 +101,61 @@ def test_episode_of(name, ep):
     assert ce.episode_of(name) == ep
 
 
+@pytest.mark.parametrize("stem,tidy", [
+    ("The.Big.Bang.Theory.S03E06.1080p.BluRay.Rus.Eng.TeamHD", "The.Big.Bang.Theory.S03E06"),
+    ("Better.Call.Saul.S03E06.WEB-DL.2160p.SDR.HEVC.2xRus.Eng", "Better.Call.Saul.S03E06"),
+    ("Rick.and.Morty.S09E01.There's.Something.About.Morty.AMZN.WEB-DL.1080p.by.AKTEP",
+     "Rick.and.Morty.S09E01.There's.Something.About.Morty"),
+    ("How to Train Your Dragon (IMAX) 2025  BDRip,720p", "How to Train Your Dragon (IMAX) 2025"),
+    ("Марсианин.2015.Extended.Cut.WEB-DL.2160p", "Марсианин.2015.Extended.Cut"),
+    # Junk words are whole words: Engagement, Russia and Rusty stay
+    ("The.Big.Bang.Theory.S04E10.The.Engagement.Reaction.720p", "The.Big.Bang.Theory.S04E10.The.Engagement.Reaction"),
+    ("From.Russia.with.Love.1963.Rusty.x264-GROUP", "From.Russia.with.Love.1963.Rusty"),
+    # Weak junk only before more junk or at the end
+    ("Charlotte's.Web.2006.1080p.BluRay", "Charlotte's.Web.2006"),
+    ("Show.S01E01.WEB.H.264", "Show.S01E01"),
+    ("Show.S01E01.Rus", "Show.S01E01"),
+    ("Film.2010.DD5.1.AAC2.0", "Film.2010"),
+    # Brackets of junk go, the others stay; a cut inside brackets closes them
+    ("[HDCLUB] Show S01E01 [rutracker.org]", "Show S01E01"),
+    ("Лекция #5. Генетика [Роберт Сапольски, 2010. Стэнфорд]", "Лекция #5. Генетика [Роберт Сапольски, 2010. Стэнфорд]"),
+    ("Film (2019, 1080p)", "Film (2019)"),
+    # Nothing before the episode goes, nor the whole name
+    ("Show.1080p.S01E02.Title", "Show.1080p.S01E02.Title"),
+    ("1080p.x264", "1080p.x264"),
+    ("Breaking.Bad.s03e03.I.F.T.", "Breaking.Bad.s03e03.I.F.T"),
+    ("Back.to.the.Future.Part.2.1989.1080p", "Back.to.the.Future.Part.2.1989"),
+])
+def test_tidy_name(stem, tidy):
+    assert ce.tidy_name(stem) == tidy
+    assert ce.tidy_name(tidy) == tidy
+
+
+def test_tidy_name_pads_numbers():
+    assert ce.number_width(["Лекция #5. Генетика", "Лекция #12. Агрессия", "Show.S01E25"]) == 2
+    assert ce.number_width(["1-Intro", "9-End"]) is None and ce.number_width(["Show.S01E10"]) is None
+    assert ce.tidy_name("Лекция #5. Генетика", 2) == "Лекция #05. Генетика"
+    assert ce.tidy_name("5-Molecular Genetics I.1080p", 2) == "05-Molecular Genetics I"
+    assert ce.tidy_name("Show.S01E05", 2) == "Show.S01E05"
+    assert ce.tidy_name("Лекция #105", 3) == "Лекция #105"
+
+
+def test_output_stems():
+    c = cfg(fixup_names=True)
+    names = ce.output_stems(c, ["s01/Show.S01E01.1080p.mkv", "s01/Show.S01E02.1080p.mkv", "s01/Show.S01E02.720p.mkv",
+                                "s02/2-Lecture.WEB-DL.mkv", "s02/10-Lecture.WEB-DL.mkv"])
+    assert names == {"s01/Show.S01E01.1080p.mkv": ("Show.S01E01", "Show S01E01"),
+                     # Two releases of one episode would get one name: they keep theirs
+                     "s01/Show.S01E02.1080p.mkv": ("Show.S01E02.1080p", "Show S01E02"),
+                     "s01/Show.S01E02.720p.mkv": ("Show.S01E02.720p", "Show S01E02"),
+                     "s02/2-Lecture.WEB-DL.mkv": ("02-Lecture", "02-Lecture"),
+                     "s02/10-Lecture.WEB-DL.mkv": ("10-Lecture", "10-Lecture")}
+    # Without --fixup_names the name stays, the title is clean anyway
+    assert ce.output_stems(cfg(), ["Show.S01E01.1080p.mkv"]) == {"Show.S01E01.1080p.mkv": ("Show.S01E01.1080p",
+                                                                                           "Show S01E01")}
+    assert ce.title_of("Rick and Morty - 307 - The Ricklantis Mixup") == "Rick and Morty - 307 - The Ricklantis Mixup"
+
+
 def test_clean_name():
     assert ce.clean_name("Some Show (2001) [x].mp4") == "Some.Show.2001.x.mp4"
     assert ce.clean_name("[Group] Show «1», it’s.mp4") == "Group.Show.1.it.s.mp4"
@@ -218,6 +273,7 @@ def test_season_converts_resumes_and_keeps_sources(tmp_path):
 
     assert ce.main(args) == 0
     assert sorted(os.listdir(out)) == ["Show.S01E01.mp4", "Show.S01E02.mp4"]
+    assert title(os.path.join(out, "Show.S01E01.mp4")) == "Show S01E01"
     r = json.load(open(report))
     assert r["status"] == "done" and r["counts"]["converted"] == 2 and r["total"] == 2
     assert tree_hash(str(root), out) == before
@@ -226,6 +282,25 @@ def test_season_converts_resumes_and_keeps_sources(tmp_path):
     assert ce.main(args) == 0
     r = json.load(open(report))
     assert r["total"] == 2 and r["counts"]["exists"] == 2
+
+
+def title(path):
+    return subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags=title", "-of", "csv=p=0", path],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+@needs_ffmpeg
+def test_release_junk_leaves_names_and_titles(tmp_path):
+    root = tmp_path / "Show.S01.1080p"
+    make_video(root / "Show.S01E01.1080p.WEB-DL.Rus.Eng.mkv")
+    out = str(tmp_path / "0out")
+    assert ce.main(["-d", str(root), "-o", out, "-f", "-s", "50"]) == 0
+    assert os.listdir(out) == ["Show.S01E01.mp4"]
+    assert title(os.path.join(out, "Show.S01E01.mp4")) == "Show S01E01"
+    # Without -f the name stays, the title is clean anyway
+    assert ce.main(["-d", str(root), "-o", out + "2", "-s", "50"]) == 0
+    assert os.listdir(out + "2") == ["Show.S01E01.1080p.WEB-DL.Rus.Eng.mp4"]
+    assert title(os.path.join(out + "2", "Show.S01E01.1080p.WEB-DL.Rus.Eng.mp4")) == "Show S01E01"
 
 
 @needs_ffmpeg
