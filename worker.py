@@ -43,6 +43,12 @@ RESTART = 3  # the worker's exit code after a code update: the supervisor starts
 STARTED = None  # set in main: when this worker started
 CODE = None  # set in main: the commit it runs
 CPU_LAST = None  # (idle, all) CPU time at the last look, for the load in between
+# nvidia-smi fails the whole query on a field its driver does not know, so the newer ones are tried apart
+GPU_FIELDS = ["utilization.gpu", "utilization.memory", "memory.used", "memory.total", "temperature.gpu",
+              "power.draw", "power.limit", "clocks.gr", "clocks.mem", "fan.speed", "pstate",
+              "pcie.link.gen.current", "pcie.link.gen.max", "pcie.link.width.current", "pcie.link.width.max"]
+GPU_NEWER = ["utilization.encoder", "utilization.decoder", "clocks_event_reasons.active"]
+GPU_QUERY = None  # the field list this driver answered
 # The worker decides where a job reads and writes, not the job file
 FORBIDDEN = ("-d", "--directory", "-o", "--output", "-r", "--report")
 
@@ -184,6 +190,69 @@ def load():
         return out or None
     except Exception as e:  # never let this stop the worker
         log.info("cannot tell the load: %s", e)
+        return None
+
+
+def gpu():
+    """The NVIDIA card as nvidia-smi (it comes with the driver) sees it: {field: number or text} with the
+    fields of GPU_FIELDS and, on a new enough driver, GPU_NEWER; what the card does not report is left
+    out. None without nvidia-smi or a card. No voltages: GeForce cards do not give them, see hwinfo()."""
+    global GPU_QUERY
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return None
+    hide = {"creationflags": 0x08000000} if os.name == "nt" else {}
+    for fields in [GPU_QUERY] if GPU_QUERY else [GPU_FIELDS + GPU_NEWER, GPU_FIELDS]:
+        try:
+            r = subprocess.run([exe, "--query-gpu=" + ",".join(fields), "--format=csv,noheader,nounits"],
+                               capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL, **hide)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.info("cannot ask nvidia-smi: %s", e)
+            return None
+        if r.returncode == 0 and r.stdout.strip():
+            GPU_QUERY = fields
+            break
+    else:
+        log.info("nvidia-smi: %s", (r.stderr or r.stdout).strip()[-200:])
+        GPU_QUERY = None  # a new driver: find the fields again next time
+        return None
+    out = {}
+    for field, v in zip(fields, (v.strip() for v in r.stdout.strip().splitlines()[0].split(","))):
+        if not v or v.startswith("[") or v == "N/A":  # [N/A], [Not Supported]
+            continue
+        try:
+            out[field] = float(v)
+        except ValueError:
+            out[field] = v  # P2, 0x0000000000000004
+    return out or None
+
+
+def hwinfo():
+    """What HWiNFO reports to the registry, [[label, value with unit], ...] in its order, or None. Which
+    sensors is set in HWiNFO (Settings, HWiNFO Gadget, "Report value in Gadget"); it runs at startup as the
+    same Windows user as this worker, see README. Only while it runs: the registry keeps the last values."""
+    if os.name != "nt":
+        return None
+    try:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq HWiNFO64.exe", "/NH", "/FO", "CSV"],
+                           capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+                           creationflags=0x08000000)
+        if "hwinfo64.exe" not in r.stdout.lower():
+            return None
+        import winreg
+        values = {}
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\HWiNFO64\VSB") as k:
+            for i in range(winreg.QueryInfoKey(k)[1]):
+                name, value, _ = winreg.EnumValue(k, i)
+                values[name] = value
+        out = []
+        i = 0
+        while f"Label{i}" in values:
+            out.append([values[f"Label{i}"], values.get(f"Value{i}")])
+            i += 1
+        return out or None
+    except Exception as e:  # no key yet, no HWiNFO: never let this stop the worker
+        log.debug("no HWiNFO values: %s", e)
         return None
 
 
@@ -498,12 +567,14 @@ def supervise(argv):
 
 
 def heartbeat(library, name, state, job_id=None, low=None):
-    """When this worker was last seen, what it does, who is logged in, its address and load, for power.py
-    and the bot. state "off": it is shutting the machine down. low: the CPUs of a lowered worker."""
+    """When this worker was last seen, what it does, who is logged in, its address and load (CPU, memory,
+    the GPU and HWiNFO's sensors), for power.py and the bot. state "off": it is shutting the machine down.
+    low: the CPUs of a lowered worker."""
     path = jobs.worker_file(library, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     jobs.write(path, {"name": name, "seen": jobs.now(), "state": state, "job": job_id, "since": STARTED, "code": CODE,
-                      "users": logged_in(), "ip": address(library), "load": load(), "pid": os.getpid(),
+                      "users": logged_in(), "ip": address(library), "load": load(), "gpu": gpu(),
+                      "sensors": hwinfo(), "pid": os.getpid(),
                       "low": {"cpus": len(low), "of": len(cpus())} if low else None, "os": platform.platform()})
 
 
