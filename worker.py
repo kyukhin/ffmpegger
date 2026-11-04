@@ -11,10 +11,12 @@ converter is frozen where it is, no job is taken, and it goes on when the file
 is gone. While .convert/control/<name>.low.json is there the converter runs at
 idle priority on half of the CPUs, so a game comes first.
 
-Started without --once it keeps itself current: before taking a job it does a
-git pull of its checkout, and when the code changed it starts again on the new
-code, so a job queued by a newer torrent server never meets an older converter.
-It runs as a child of itself for that, see supervise.
+Started without --once it keeps itself current: when it starts, before taking a
+job and once an hour while idle it does a git pull of its checkout, and when the
+code changed it starts again on the new code, so a job queued by a newer torrent
+server never meets an older converter. It runs as a child of itself for that, see
+supervise. It also writes a line a second about the NVIDIA card to
+0diag/gpu-trace/ in the library, see trace.
 
     worker.py --library \\\\192.168.1.1\\lib          # Windows, started at boot by install-windows.ps1
     worker.py --library /Volumes/lib --once          # anywhere: empty the queue and exit
@@ -30,8 +32,10 @@ import platform
 import shutil
 import signal
 import socket
+import re
 import subprocess
 import sys
+import threading
 import time
 
 from ffmpegger import jobs
@@ -49,6 +53,8 @@ GPU_FIELDS = ["utilization.gpu", "utilization.memory", "memory.used", "memory.to
               "pcie.link.gen.current", "pcie.link.gen.max", "pcie.link.width.current", "pcie.link.width.max"]
 GPU_NEWER = ["utilization.encoder", "utilization.decoder", "clocks_event_reasons.active"]
 GPU_QUERY = None  # the field list this driver answered
+TRACE_DIR = ("0diag", "gpu-trace")  # in the library: trace() writes a line a second there
+UPDATE_EVERY = 3600  # seconds between looks for new code while idle
 # The worker decides where a job reads and writes, not the job file
 FORBIDDEN = ("-d", "--directory", "-o", "--output", "-r", "--report")
 
@@ -227,33 +233,93 @@ def gpu():
     return out or None
 
 
-def hwinfo():
-    """What HWiNFO reports to the registry, [[label, value with unit], ...] in its order, or None. Which
-    sensors is set in HWiNFO (Settings, HWiNFO Gadget, "Report value in Gadget"); it runs at startup as the
-    same Windows user as this worker, see README. Only while it runs: the registry keeps the last values."""
-    if os.name != "nt":
-        return None
+def hwinfo_running():
+    """HWiNFO64 runs on this machine, in any session."""
     try:
         r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq HWiNFO64.exe", "/NH", "/FO", "CSV"],
                            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
                            creationflags=0x08000000)
-        if "hwinfo64.exe" not in r.stdout.lower():
-            return None
-        import winreg
-        values = {}
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\HWiNFO64\VSB") as k:
-            for i in range(winreg.QueryInfoKey(k)[1]):
-                name, value, _ = winreg.EnumValue(k, i)
-                values[name] = value
-        out = []
-        i = 0
-        while f"Label{i}" in values:
-            out.append([values[f"Label{i}"], values.get(f"Value{i}")])
-            i += 1
-        return out or None
-    except Exception as e:  # no key yet, no HWiNFO: never let this stop the worker
+        return "hwinfo64.exe" in r.stdout.lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def hwinfo_values():
+    """[[label, value with unit], ...] as HWiNFO last wrote them to the registry, in its order. OSError
+    without the key."""
+    import winreg
+    values = {}
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\HWiNFO64\VSB") as k:
+        for i in range(winreg.QueryInfoKey(k)[1]):
+            name, value, _ = winreg.EnumValue(k, i)
+            values[name] = value
+    out = []
+    i = 0
+    while f"Label{i}" in values:
+        out.append([values[f"Label{i}"], values.get(f"Value{i}")])
+        i += 1
+    return out
+
+
+def hwinfo():
+    """What HWiNFO reports to the registry, [[label, value with unit], ...] in its order, or None. Which
+    sensors is set in HWiNFO (Settings, HWiNFO Gadget, "Report value in Gadget"); it runs at log on as the
+    same Windows user as this worker, see README. Only while it runs: the registry keeps the last values."""
+    if os.name != "nt" or not hwinfo_running():
+        return None
+    try:
+        return hwinfo_values() or None
+    except Exception as e:  # no key yet: never let this stop the worker
         log.debug("no HWiNFO values: %s", e)
         return None
+
+
+def gpu_sensors(sensors):
+    """The GPU's voltages, powers and temperatures out of HWiNFO's values."""
+    return [[label, value] for label, value in sensors or []
+            if "gpu" in str(label).lower() and re.search(r"\s(V|W|°C)$", str(value))]
+
+
+def trace(library, name):
+    """A line a second about the card into <library>/0diag/gpu-trace/<name>-<start>.csv, for the seconds
+    before it dies (the heartbeat comes once a minute): the time, nvidia-smi's fields (it streams them
+    itself, -lms 1000) and, while HWiNFO runs, its GPU voltages, powers and temperatures. A new file per
+    start, so the one of a crash survives the reboot; each line goes to the server at once, a hard reset
+    loses at most the last second. When nvidia-smi stops (the GPU is lost) its message is logged too, and
+    it is started again 10 s later. A thread: on any trouble it waits and starts over."""
+    exe = shutil.which("nvidia-smi")
+    if os.name != "nt" or not exe:
+        return
+    gpu()  # which fields this driver answers
+    fields = GPU_QUERY or GPU_FIELDS
+    folder = os.path.join(library, *TRACE_DIR)
+    path, checked, running = None, 0, False
+    while True:
+        try:
+            os.makedirs(folder, exist_ok=True)
+            path = path or os.path.join(folder, "%s-%s.csv" % (name, time.strftime("%Y%m%d-%H%M%S")))
+            p = subprocess.Popen([exe, "--query-gpu=" + ",".join(fields), "--format=csv,noheader,nounits",
+                                  "-lms", "1000"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, text=True, creationflags=0x08000000)
+            with open(path, "a", encoding="utf-8", newline="") as f:
+                if f.tell() == 0:
+                    f.write("time," + ",".join(fields) + ",hwinfo\n")
+                for line in p.stdout:
+                    if time.time() - checked > 30:
+                        checked, running = time.time(), hwinfo_running()
+                    hw = ""
+                    if running:
+                        try:
+                            hw = "; ".join(f"{label}={value}" for label, value in gpu_sensors(hwinfo_values()))
+                        except Exception:
+                            pass
+                    f.write("%s,%s,\"%s\"\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), line.strip(), hw.replace('"', "'")))
+                    f.flush()
+                    os.fsync(f.fileno())
+            log.info("gpu trace: nvidia-smi stopped, exit %s", p.wait())
+        except Exception as e:
+            log.info("gpu trace: %s", e)
+        time.sleep(10)
 
 
 def address(library):
@@ -552,6 +618,7 @@ def supervise(argv):
     back, and stopping the task stops the conversion too. The supervisor itself is only replaced by a
     restart of the task or of the machine."""
     log.info("supervisor started, the worker runs as its child")
+    update()  # a boot brings the newest code; the supervisor itself takes it at the next boot
     while True:
         child = subprocess.Popen([sys.executable, os.path.realpath(__file__), "--child"] + argv,
                                  stdin=subprocess.DEVNULL)
@@ -705,8 +772,10 @@ def main(argv=None):
     setup_logging(a.log)
     log.info("started as %s on %s, %s priority, python %s, code %s",
              a.name, a.library, a.priority, sys.version.split()[0], CODE)
+    if a.child:
+        threading.Thread(target=trace, args=(a.library, a.name), daemon=True, name="gpu-trace").start()
 
-    requeued = False
+    requeued, looked = False, time.time()
     while True:
         try:
             if not requeued:
@@ -727,6 +796,11 @@ def main(argv=None):
                 continue
             if action == "off-when-idle" and not stop:
                 power_off(a.library, a.name, "the queue is empty")
+            # Idle: new code now and then too, not only before a job (a restart costs nothing here)
+            if a.child and time.time() - looked > UPDATE_EVERY:
+                looked = time.time()
+                if update():
+                    return RESTART
         except OSError as e:
             # The share is not there yet (just booted, network down): try again later,
             # and take back what was running here when it went away

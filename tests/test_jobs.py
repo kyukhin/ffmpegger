@@ -359,7 +359,8 @@ def test_supervisor_starts_the_worker_again(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         worker.supervise(["--library", "L"])
     assert len(started) == 2 and started[0][-3:] == ["--child", "--library", "L"]
-    assert slept == [60] and updates == [1]  # at once after an update, after a minute and a pull when it died
+    # A pull when it starts; at once after an update, after a minute and a pull when it died
+    assert slept == [60] and updates == [1, 1]
 
 
 def test_paused_worker_takes_no_job(tmp_path):

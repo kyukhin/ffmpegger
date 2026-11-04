@@ -65,3 +65,17 @@ def test_no_card_or_no_nvidia_smi(smi, monkeypatch):
 
 def test_hwinfo_is_windows_only():
     assert worker.os.name == "nt" or worker.hwinfo() is None
+
+
+def test_gpu_sensors_keeps_the_cards_voltages_powers_and_temperatures():
+    hw = [["Core 0 VID", "1.250 V"], ["GPU Core Voltage", "1.000 V"], ["GPU 12VHPWR Power", "41.249 W"],
+          ["GPU Hot Spot Temperature", "57.1 °C"], ["GPU Clock", "2,640.0 MHz"], ["GPU Fan1", "0 RPM"],
+          ["CPU Package", "45 °C"], ["GPU PCIe +12V Input Voltage", "12.512 V"]]
+    assert [label for label, _ in worker.gpu_sensors(hw)] == [
+        "GPU Core Voltage", "GPU 12VHPWR Power", "GPU Hot Spot Temperature", "GPU PCIe +12V Input Voltage"]
+    assert worker.gpu_sensors(None) == []
+
+
+def test_trace_is_windows_only(monkeypatch):
+    monkeypatch.setattr(worker.os, "name", "posix")
+    assert worker.trace("/nowhere", "test") is None  # returns at once instead of looping

@@ -203,10 +203,11 @@ converts on the efficiency cores only. In normal
 priority ffmpeg also opts out of Windows' power throttling (EcoQoS), which would
 otherwise keep a process without a window on the E-cores.
 
-**Updates and restarts.** The desktop keeps itself current: before each job the
-worker does `git pull --ff-only` of its checkout, and when the code changed it
-starts again on it before taking the job, so a job queued by a newer torrent
-server never meets an older converter. For that the task runs a small
+**Updates and restarts.** The desktop keeps itself current: when the task
+starts (a boot), before each job and once an hour while idle the worker does
+`git pull --ff-only` of its checkout, and when the code changed it starts again
+on it (before taking the job), so a job queued by a newer torrent server never
+meets an older converter and a fix arrives within the hour with an empty queue. For that the task runs a small
 supervisor (`worker.py` itself) that runs the worker as its child: it starts
 the worker again at once after an update, and a minute later (after another
 pull) when it dies. On Windows the worker, the converter and ffmpeg are in a
@@ -227,7 +228,12 @@ who is logged in to Windows and how busy its CPU and memory are, and for an
 NVIDIA card what `nvidia-smi` says (load, VRAM, temperature, power, clocks,
 PCIe link, why it holds its clocks back). Voltages are not there on GeForce
 cards: the heartbeat also carries whatever HWiNFO reports to the registry
-(its "Report value in Gadget" sensors) while HWiNFO runs as the worker's user. `power.py --library /mnt/lib pause <name>` leaves
+(its "Report value in Gadget" sensors) while HWiNFO runs as the worker's user.
+The heartbeat is once a minute; for the seconds before a card dies the worker
+also writes a line a second to `0diag/gpu-trace/<name>-<start>.csv` in the
+library (nvidia-smi's fields and HWiNFO's GPU voltages, powers and
+temperatures), a new file per start and each line flushed to the server, so a
+hard reset loses at most the last second. The server side cleans up old files. `power.py --library /mnt/lib pause <name>` leaves
 `.convert/control/<name>.pause.json`: within 20 seconds the worker freezes the
 running converter and ffmpeg where they are (nothing is lost, the CPU is free,
 Windows is still kept awake) and takes no new job, also after a reboot, until
