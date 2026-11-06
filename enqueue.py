@@ -15,8 +15,8 @@ Without labels, a torrent inside a profile's folder (profiles.json) is queued wi
     enqueue.py --library /mnt/lib --labels "show:Better Call Saul,convert:bmw" /mnt/lib/0unsort/BCS.S03
 
 It only links files and writes job files into the queue on the share; worker.py
-does the converting. Results go to 0conv/<profile>/ plus the source's path (see
-output_of). See README.md."""
+does the converting. Results go to 0conv/<the profile's results folder>/ plus the source's
+path (see output_of). See README.md."""
 
 import argparse
 import os
@@ -40,9 +40,11 @@ def match(profiles, rel):
 
 
 def output_of(cfg, profile, rel, is_dir):
-    """Where the results go, relative to the library: 0conv/<profile>/ plus the source's folder,
-    minus the profile folder or the downloads folder it was downloaded into:
+    """Where the results go, relative to the library: 0conv/<the profile's "results", its name by
+    default>/ plus the source's folder, minus the profile folder or the downloads folder it was
+    downloaded into:
         0unsort/0web/Show.S01      -> 0conv/web/Show.S01
+        0unsort/0web-rus/Show.S01  -> 0conv/web/Show.S01 (web-rus has "results": "web")
         0unsort/0bmw/Rio.mkv       -> 0conv/bmw
         series/Better Call Saul    -> 0conv/bmw/series/Better Call Saul"""
     folder = rel if is_dir else posixpath.dirname(rel)
@@ -50,7 +52,8 @@ def output_of(cfg, profile, rel, is_dir):
     inside = [p for p in prefixes if p and (folder == p or folder.startswith(p + "/"))]
     if inside:
         folder = folder[len(max(inside, key=len)):].strip("/")
-    return posixpath.join(cfg.get("output", "0conv"), profile, folder).rstrip("/")
+    results = cfg["profiles"].get(profile, {}).get("results", profile)
+    return posixpath.join(cfg.get("output", "0conv"), results, folder).rstrip("/")
 
 
 def log(library, line):

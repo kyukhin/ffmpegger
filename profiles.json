@@ -1,5 +1,5 @@
 {
- "comment": "A torrent finished inside a profile's folder (relative to the library root) is queued with that profile; the deepest matching folder wins. args go to convert_eng.py as they are.",
+ "comment": "A torrent finished inside a profile's folder (relative to the library root) is queued with that profile; the deepest matching folder wins. Results go to output/<results>, the profile's name when results is not given. args go to convert_eng.py as they are.",
  "common": ["-v", "-f"],
  "output": "0conv",
  "downloads": "0unsort",
@@ -11,7 +11,8 @@
   },
   "web-rus": {
    "folder": "0unsort/0web-rus",
-   "about": "Russian audio, no subtitles, at most 1080p",
+   "results": "web",
+   "about": "Russian audio, no subtitles, at most 1080p, into web's folder",
    "args": ["--size_target=1600", "--max_height=1080", "--subtitles_disabled", "--audio_lang=rus"]
   },
   "bmw": {
@@ -21,7 +22,8 @@
   },
   "bmw-rus": {
    "folder": "0unsort/0bmw-rus",
-   "about": "as bmw, Russian audio, no subtitles",
+   "results": "bmw",
+   "about": "as bmw, Russian audio, no subtitles, into bmw's folder",
    "args": ["--size_target=1600", "--video_fit=1920x700", "--subtitles_disabled", "--audio_lang=rus"]
   },
   "ipad-rus": {

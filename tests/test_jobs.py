@@ -12,7 +12,7 @@ from ffmpegger import jobs
 from tests.test_convert_eng import make_video, needs_ffmpeg, touch
 
 PROFILES = {"web": {"folder": "0unsort/0web", "args": ["-s", "50"]},
-            "web-rus": {"folder": "0unsort/0web-rus", "args": ["-s", "50", "--audio_lang=rus", "-sd"]},
+            "web-rus": {"folder": "0unsort/0web-rus", "results": "web", "args": ["-s", "50", "--audio_lang=rus", "-sd"]},
             "deep": {"folder": "0unsort/0web/deep", "args": []}}
 
 
@@ -64,6 +64,7 @@ def test_output_of():
     assert enqueue.output_of(cfg, "web", "0unsort/0web/Rio.mkv", False) == "0conv/web"
     assert enqueue.output_of(cfg, "web", "0unsort/0web/deep/Show", True) == "0conv/web/Show"
     assert enqueue.output_of(cfg, "bmw", "0unsort/0web-rus/Show", True) == "0conv/bmw/Show"
+    assert enqueue.output_of(cfg, "web-rus", "0unsort/0web-rus/Show", True) == "0conv/web/Show"
     assert enqueue.output_of(cfg, "web", "0unsort/Dragon 2.mkv", False) == "0conv/web"
     assert enqueue.output_of(cfg, "bmw", "series/Better Call Saul", True) == "0conv/bmw/series/Better Call Saul"
     assert enqueue.output_of(cfg, "bmw", "series/Better Call Saul/s03", True) == "0conv/bmw/series/Better Call Saul/s03"
@@ -98,7 +99,7 @@ def test_labels(tmp_path, monkeypatch):
     monkeypatch.setenv("TR_TORRENT_LABELS", "convert:web,convert:web-rus,convert:nope")
     assert enqueue.main(args) == 1
     rio = [(j["profile"], j["output"]) for _, j in jobs.listing(str(lib), "queue") if j["path"] == "0unsort/Rio.2011.mkv"]
-    assert sorted(rio) == [("web", "0conv/web"), ("web-rus", "0conv/web-rus")]
+    assert sorted(rio) == [("web", "0conv/web"), ("web-rus", "0conv/web")]
     assert "no profile nope" in open(str(lib / ".convert" / "enqueue.log")).read()
 
     # A film with its own title, arranged and converted
@@ -122,7 +123,7 @@ def test_labels(tmp_path, monkeypatch):
     monkeypatch.setenv("TR_TORRENT_LABELS", "show:Show,convert:web-rus")
     assert enqueue.main(args + ["--series", "films/0series"]) == 0
     assert os.path.exists(str(lib / "films" / "0series" / "Show" / "s01" / "Show.S01E01.mkv"))
-    assert ("films/0series/Show/s02", "0conv/web-rus/films/0series/Show/s02") in [
+    assert ("films/0series/Show/s02", "0conv/web/films/0series/Show/s02") in [
         (j["path"], j["output"]) for _, j in jobs.listing(str(lib), "queue")]
 
 
@@ -171,7 +172,7 @@ def test_season_through_the_queue(tmp_path):
     assert worker.main(worker_args(lib, tmp_path)) == 0
     [(rus_id, rus_job)] = jobs.listing(str(lib), "done")
     assert rus_job["profile"] == "web-rus" and rus_job["exit"] == 0
-    assert os.path.exists(str(lib / "0conv" / "web-rus" / "Rio.mp4"))
+    assert os.path.exists(str(lib / "0conv" / "web" / "Rio.mp4"))
 
     # E02 has no English subtitles: the job fails, E01 is converted, the reason is in the job
     [(job_id, job)] = jobs.listing(str(lib), "failed")

@@ -18,6 +18,7 @@ spec.loader.exec_module(cn)
 
 PROFILES = {"common": ["-v"], "output": "0conv", "downloads": "0unsort",
             "profiles": {"bmw": {"folder": "0unsort/0bmw", "args": ["-f"]},
+                         "bmw-rus": {"folder": "0unsort/0bmw-rus", "results": "bmw", "args": ["-f"]},
                          "raw": {"folder": "0unsort/0raw", "args": []}}}
 
 

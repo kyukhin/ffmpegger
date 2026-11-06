@@ -58,12 +58,15 @@ deepest matching folder wins.
 | Profile | Folder | Result |
 |---|---|---|
 | web | `0unsort/0web` | English audio, English subtitles burnt in, 1600 kbit/s, at most 1080p |
-| web-rus | `0unsort/0web-rus` | Russian audio, no subtitles, 1600 kbit/s, at most 1080p |
+| web-rus | `0unsort/0web-rus` | Russian audio, no subtitles, 1600 kbit/s, at most 1080p, into web's folder |
 | bmw | `0unsort/0bmw` | as web, cropped and scaled to the car's 1920x700 screen |
-| bmw-rus | `0unsort/0bmw-rus` | as bmw, Russian audio, no subtitles |
+| bmw-rus | `0unsort/0bmw-rus` | as bmw, Russian audio, no subtitles, into bmw's folder |
 | ipad-rus | `0unsort/0ipad-rus` | Russian audio, no subtitles, 800 kbit/s, at most 720p |
 
-Results go to `0conv/<profile>/` plus the source's path, with its subfolders:
+Results go to `0conv/<profile>/` plus the source's path, with its subfolders; a
+profile's `results` names another folder there (web-rus has `"results": "web"`,
+bmw-rus `"bmw"`: a device gets one folder whatever the language, and a video
+converted for one of the two is not converted again for the other):
 `series/Better Call Saul/s01` converts into `0conv/bmw/series/Better Call Saul/s01/`,
 a download into `0unsort/0web/Show.S01` into `0conv/web/Show.S01/` (the profile or
 downloads folder is dropped). With `-f` (all profiles) file names lose their

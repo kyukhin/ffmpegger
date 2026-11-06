@@ -90,7 +90,9 @@ def cleanup(paths, library=None, profiles=None, dry_run=False, out=print):
         skip = {root, os.path.join(library, profiles.get("downloads", "0unsort"))}
         for name, p in sorted(profiles["profiles"].items()):
             fixup = any(a in FIXUP for a in profiles.get("common", []) + p.get("args", []))
-            outputs.append((os.path.join(root, name), fixup))
+            there = os.path.join(root, p.get("results", name))
+            if there not in [o for o, _ in outputs]:  # several profiles can share one results folder
+                outputs.append((there, fixup))
 
     def rel(path):
         return os.path.relpath(path, library) if library else path
