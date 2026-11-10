@@ -7,12 +7,14 @@ The torrent's labels (set by the bot) say what to do, wherever it was downloaded
     film[:<title>]    arrange it into films/<title>/
     convert:<profile> queue a conversion, of the arranged season folders when it was arranged;
                       one label per profile
+    ts                with convert: the time from the start in the corner (convert_eng.py --timestamp)
 Without labels, a torrent inside a profile's folder (profiles.json) is queued with that profile.
 
     enqueue.py --library /mnt/lib                       # Transmission: TR_TORRENT_DIR, _NAME, _LABELS
     enqueue.py --library /mnt/lib /mnt/lib/0unsort/0web/Show.S01
     enqueue.py --library /mnt/lib --profile bmw /mnt/lib/films/Rio.mkv
     enqueue.py --library /mnt/lib --labels "show:Better Call Saul,convert:bmw" /mnt/lib/0unsort/BCS.S03
+    enqueue.py --library /mnt/lib --labels "convert:bmw,ts" "/mnt/lib/0unsort/Some lectures"
 
 It only links files and writes job files into the queue on the share; worker.py
 does the converting. Results go to 0conv/<the profile's results folder>/ plus the source's
@@ -68,9 +70,9 @@ def log(library, line):
 
 
 def parse_labels(text):
-    """"show:Better Call Saul,convert:bmw,convert:web" -> {"show": ..., "film": ..., "convert": [...]}.
+    """"show:Better Call Saul,convert:bmw,convert:web,ts" -> {"show": ..., "film": ..., "convert": [...], "ts": True}.
     Transmission gives a script the labels comma separated; a label of its own (say "kids") is ignored."""
-    out = {"show": None, "film": None, "convert": []}
+    out = {"show": None, "film": None, "convert": [], "ts": False}
     for label in (text or "").split(","):
         key, _, value = label.strip().partition(":")
         key, value = key.strip().lower(), value.strip()
@@ -80,11 +82,14 @@ def parse_labels(text):
             out["film"] = value or True
         elif key == "convert" and value:
             out["convert"] += [v.strip() for v in value.split("+") if v.strip()]
+        elif key == "ts" and not value:
+            out["ts"] = True
     return out
 
 
-def queue(library, cfg, rel, name, is_dir):
-    """Writes the job unless the same source is already waiting or running for this profile."""
+def queue(library, cfg, rel, name, is_dir, timestamp=False):
+    """Writes the job unless the same source is already waiting or running for this profile. timestamp: the
+    time from the start in the corner, for this job only."""
     for state in ("queue", "running"):
         for job_id, job in jobs.listing(library, state):
             if job.get("path") == rel and job.get("profile") == name:
@@ -96,11 +101,12 @@ def queue(library, cfg, rel, name, is_dir):
         "path": rel,
         "profile": name,
         "output": output_of(cfg, name, rel, is_dir),
-        "args": cfg.get("common", []) + cfg["profiles"][name]["args"],
+        "args": cfg.get("common", []) + cfg["profiles"][name]["args"] + (["--timestamp"] if timestamp else []),
+        "timestamp": timestamp,
         "queued": jobs.now(),
         "server": os.uname().nodename if hasattr(os, "uname") else "",
     })
-    log(library, "queued %s as %s: %s" % (name, job_id, rel))
+    log(library, "queued %s%s as %s: %s" % (name, " with the time" if timestamp else "", job_id, rel))
 
 
 def main(argv=None):
@@ -110,6 +116,7 @@ def main(argv=None):
     p.add_argument("--profile", help="use this profile whatever the folder")
     p.add_argument("--labels", help="as Transmission's labels, comma separated; default: $TR_TORRENT_LABELS")
     p.add_argument("--series", default="series", help="the shows' folder in the library, default series")
+    p.add_argument("--timestamp", action="store_true", help="the time from the start in the corner, as the ts label")
     p.add_argument("path", nargs="?", help="default: $TR_TORRENT_DIR/$TR_TORRENT_NAME")
     a = p.parse_args(argv)
 
@@ -157,7 +164,7 @@ def main(argv=None):
 
     for name in names:
         for source, is_dir in sources:
-            queue(library, cfg, source, name, is_dir)
+            queue(library, cfg, source, name, is_dir, timestamp=a.timestamp or labels["ts"])
     return 1 if unknown else 0
 
 

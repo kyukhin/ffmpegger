@@ -369,6 +369,41 @@ def test_max_height():
     assert ce.video_filters(cfg(max_height=1080, video_fit=(1920, 700)), 3840, 2160)[-1] == "scale=w=1920:h=700"
 
 
+def test_timestamp_layout(tmp_path):
+    assert ce.frame_size(cfg(max_height=1080), 3840, 2160) == (1920, 1080)
+    assert ce.frame_size(cfg(max_height=1080, video_fit=(1920, 700)), 3840, 2160) == (1920, 700)
+    assert ce.frame_size(cfg(), 1280, 720) == (1280, 720)
+    assert ce.clock_text(65, False) == "01:05" and ce.clock_text(3725, True) == "01:02:05"
+    ass = str(tmp_path / "t.ass")
+    ce.timestamp_ass(ass, 1920, 700, 90.4)
+    lines = open(ass).read().splitlines()
+    assert "PlayResX: 1920" in lines and "PlayResY: 700" in lines
+    assert [line for line in lines if line.startswith("Style: TS,Arial,32,")]
+    events = [line for line in lines if line.startswith("Dialogue:")]
+    assert events[0] == "Dialogue: 0,0:00:00.00,0:00:01.00,TS,,0,0,0,,00:00"
+    assert len(events) == 91 and events[-1].endswith(",01:30")
+    # An hour or longer: hours from the first second
+    ce.timestamp_ass(ass, 1920, 1080, 3600)
+    events = [line for line in open(ass).read().splitlines() if line.startswith("Dialogue:")]
+    assert events[0].endswith(",00:00:00") and events[-1].endswith(",01:00:00")
+
+
+def top_right(path):
+    """The top right corner of the first frame, as raw bytes."""
+    return subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf", "crop=60:30:100:0", "-frames:v", "1",
+                           "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+
+
+@needs_ffmpeg
+def test_timestamp_burnt_in(tmp_path):
+    movie = make_video(tmp_path / "m.mkv")
+    plain, stamped = str(tmp_path / "plain"), str(tmp_path / "stamped")
+    assert ce.main(["-d", movie, "-o", plain, "-q", "30"]) == 0
+    assert ce.main(["-d", movie, "-o", stamped, "-q", "30", "-ts", "-r", str(tmp_path / "r.json")]) == 0
+    assert top_right(os.path.join(plain, "m.mp4")) != top_right(os.path.join(stamped, "m.mp4"))
+    assert json.load(open(str(tmp_path / "r.json")))["videos"][0]["timestamp"] is True
+
+
 @needs_ffmpeg
 def test_ten_bit_source_scaled_down_to_eight_bits(tmp_path):
     """A 4K WEB-DL is HEVC Main 10: the result must be 8-bit H.264 that plays anywhere, at --max_height."""

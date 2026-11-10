@@ -72,10 +72,29 @@ def test_output_of():
 
 def test_parse_labels():
     assert enqueue.parse_labels("show:Better Call Saul, convert:bmw,convert:web,kids") == \
-        {"show": "Better Call Saul", "film": None, "convert": ["bmw", "web"]}
+        {"show": "Better Call Saul", "film": None, "convert": ["bmw", "web"], "ts": False}
     assert enqueue.parse_labels("film,convert:web+bmw")["film"] is True
     assert enqueue.parse_labels("film:Rio (2011)")["film"] == "Rio (2011)"
-    assert enqueue.parse_labels(None) == {"show": None, "film": None, "convert": []}
+    assert enqueue.parse_labels("convert:bmw,ts")["ts"] is True
+    assert enqueue.parse_labels(None) == {"show": None, "film": None, "convert": [], "ts": False}
+
+
+def test_ts_label_adds_the_timestamp(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    touch(lib / "0unsort" / "Lectures" / "01 - Intro.mkv")
+    for var in ("TR_TORRENT_DIR", "TR_TORRENT_NAME"):
+        monkeypatch.delenv(var, raising=False)
+    args = ["--library", str(lib), "--profiles", profiles_file(tmp_path)]
+    assert enqueue.main(args + ["--labels", "convert:web,convert:deep,ts", str(lib / "0unsort" / "Lectures")]) == 0
+    got = {j["profile"]: j for _, j in jobs.listing(str(lib), "queue")}
+    assert sorted(got) == ["deep", "web"]
+    assert all(j["timestamp"] and j["args"][-1] == "--timestamp" for j in got.values())
+    assert "queued web with the time" in open(str(lib / ".convert" / "enqueue.log")).read()
+    # Without it nothing changes
+    touch(lib / "0unsort" / "Other" / "x.mkv")
+    assert enqueue.main(args + ["--labels", "convert:web", str(lib / "0unsort" / "Other")]) == 0
+    other = [j for _, j in jobs.listing(str(lib), "queue") if j["path"] == "0unsort/Other"][0]
+    assert other["timestamp"] is False and "--timestamp" not in other["args"]
 
 
 def test_labels(tmp_path, monkeypatch):

@@ -86,6 +86,7 @@ def parse_args(argv=None):
         "settings_subtitles": None,
         "subtitles_disabled": None,
         "ignore_no_subtitles": False,
+        "timestamp": False,
         "test_mode": False,
         "a_stream": None,
         "quality": 16,
@@ -163,6 +164,11 @@ def parse_args(argv=None):
                         help="Proceed without subtitles if English track not found.",
                         action="store_true")
 
+    parser.add_argument("-ts", "--timestamp",
+                        help="Burn in the time from the start, mm:ss (hh:mm:ss for an hour or longer), "
+                             "in the top right corner.",
+                        action="store_true")
+
     parser.add_argument("-v", "--verbose",
                         help="Be verbose (TODO: make it integer).",
                         action="store_true")
@@ -195,6 +201,7 @@ def parse_args(argv=None):
     cfg["overwrite"] = args.yes
     cfg["subtitles_disabled"] = args.subtitles_disabled
     cfg["ignore_no_subtitles"] = args.ignore_no_subtitles
+    cfg["timestamp"] = args.timestamp
     if args.quality is not None: cfg["quality"] = args.quality
     if args.size_target is not None: cfg["size_target"] = args.size_target
 
@@ -420,6 +427,15 @@ def probe(cfg, video):
         return None
     return json.loads(res.stdout).get("streams", [])
 
+def duration_of(video):
+    """The video's length in seconds as ffprobe sees it, or None."""
+    res = subprocess.run(["ffprobe", "-v", "error", "-of", "json", "-show_entries", "format=duration", "-i", video],
+                         capture_output=True, encoding="utf-8", errors="replace")
+    try:
+        return float(json.loads(res.stdout)["format"]["duration"])
+    except (ValueError, KeyError, TypeError):
+        return None
+
 def tag(stream, name):
     return (stream.get("tags") or {}).get(name, "")
 
@@ -510,6 +526,45 @@ def video_filters(cfg, width, height):
     scale = "scale=w="+str(fit_w)+":h="+str(fit_h)
     print("INFO: video track conversion command is", crop + "," + scale)
     return [crop, scale]
+
+def frame_size(cfg, width, height):
+    """The picture's size after video_filters, which the timestamp is laid out for."""
+    if cfg["video_fit"] is not None:
+        return cfg["video_fit"]
+    if not width or not height:
+        return 1920, 1080
+    if cfg["max_height"] and height > cfg["max_height"]:
+        return int(round(width * cfg["max_height"] / height / 2) * 2), cfg["max_height"]
+    return width, height
+
+def clock_text(seconds, hours):
+    h, rest = divmod(int(seconds), 3600)
+    return ("%02d:%02d:%02d" % (h, rest // 60, rest % 60)) if hours else "%02d:%02d" % (rest // 60, rest % 60)
+
+def timestamp_ass(path, width, height, seconds):
+    """The time from the start as ASS subtitles, one event a second, in the top right corner, white with a
+    black outline: libass burns it in as it burns subtitles, so no font file has to be found on the worker.
+    hh: when the video is an hour or longer; a video of unknown length gets 6 hours of it."""
+    seconds = seconds or 6 * 3600
+    hours = seconds >= 3600
+    size, margin = max(16, round(height * 0.045)), max(8, round(height * 0.02))
+    head = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: %d" % width, "PlayResY: %d" % height,
+            "ScaledBorderAndShadow: yes", "WrapStyle: 2", "",
+            "[V4+ Styles]",
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+            "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+            "Alignment, MarginL, MarginR, MarginV, Encoding",
+            "Style: TS,Arial,%d,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,%d,0,9,%d,%d,%d,1"
+            % (size, max(1, size // 16), margin, margin, margin),
+            "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
+
+    def at(t):
+        return "%d:%02d:%02d.00" % (t // 3600, t % 3600 // 60, t % 60)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(head) + "\n")
+        for t in range(int(seconds) + 1):
+            f.write("Dialogue: 0,%s,%s,TS,,0,0,0,,%s\n" % (at(t), at(t + 1), clock_text(t, hours)))
 
 def full_speed(proc):
     """Windows 11 throttles a process that has no window (EcoQoS) and keeps it on the efficiency
@@ -671,6 +726,11 @@ def convert_one(cfg, e):
             subs = ("subtitles=filename=" + filter_path(subs_src) if ext_subs
                     else "subtitles=filename=%s:si=%d" % (filter_path(src), si))
             vf.append(subs + (":" + cfg["settings_subtitles"] if cfg["settings_subtitles"] else ""))
+        if cfg["timestamp"]:
+            ass = join(tmp, "timestamp.ass")
+            timestamp_ass(ass, *frame_size(cfg, v.get("width") or 0, v.get("height") or 0), duration_of(src))
+            vf.append("subtitles=filename=" + filter_path(ass))
+            item["timestamp"] = True
         if cfg["verbose"]: print("DBG: video filter setting:", vf)
 
         common = ["ffmpeg", "-hide_banner", "-nostdin", "-y",
