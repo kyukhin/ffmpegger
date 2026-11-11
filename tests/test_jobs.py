@@ -72,11 +72,12 @@ def test_output_of():
 
 def test_parse_labels():
     assert enqueue.parse_labels("show:Better Call Saul, convert:bmw,convert:web,kids") == \
-        {"show": "Better Call Saul", "film": None, "convert": ["bmw", "web"], "ts": False}
+        {"show": "Better Call Saul", "film": None, "convert": ["bmw", "web"], "ts": False, "redo": False}
     assert enqueue.parse_labels("film,convert:web+bmw")["film"] is True
     assert enqueue.parse_labels("film:Rio (2011)")["film"] == "Rio (2011)"
     assert enqueue.parse_labels("convert:bmw,ts")["ts"] is True
-    assert enqueue.parse_labels(None) == {"show": None, "film": None, "convert": [], "ts": False}
+    assert enqueue.parse_labels("convert:bmw,redo")["redo"] is True
+    assert enqueue.parse_labels(None) == {"show": None, "film": None, "convert": [], "ts": False, "redo": False}
 
 
 def test_ts_label_adds_the_timestamp(tmp_path, monkeypatch):
@@ -95,6 +96,20 @@ def test_ts_label_adds_the_timestamp(tmp_path, monkeypatch):
     assert enqueue.main(args + ["--labels", "convert:web", str(lib / "0unsort" / "Other")]) == 0
     other = [j for _, j in jobs.listing(str(lib), "queue") if j["path"] == "0unsort/Other"][0]
     assert other["timestamp"] is False and "--timestamp" not in other["args"]
+    assert other["redo"] is False and "-y" not in other["args"]
+
+
+def test_redo_label_converts_again(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    touch(lib / "films" / "0series" / "Show" / "s01" / "Show.S01E01.mkv")
+    for var in ("TR_TORRENT_DIR", "TR_TORRENT_NAME"):
+        monkeypatch.delenv(var, raising=False)
+    args = ["--library", str(lib), "--profiles", profiles_file(tmp_path)]
+    assert enqueue.main(args + ["--labels", "convert:web-rus,ts,redo", str(lib / "films" / "0series" / "Show")]) == 0
+    [(_, job)] = jobs.listing(str(lib), "queue")
+    assert job["redo"] and job["timestamp"] and job["args"][-2:] == ["--timestamp", "-y"]
+    assert job["output"] == "0conv/web/films/0series/Show"
+    assert "over the results there" in open(str(lib / ".convert" / "enqueue.log")).read()
 
 
 def test_labels(tmp_path, monkeypatch):

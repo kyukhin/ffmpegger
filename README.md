@@ -36,6 +36,7 @@ was downloaded:
 | `show:Better Call Saul` | arranges the episodes into `series/Better Call Saul/s01/`, `s02/`, … by `SxxEyy`; lectures numbered without a season (`Лекция #10`, `Lecture 10`, `1-Title`) into the season their folder names, else one season per folder of them |
 | `film` or `film:Rio (2011)` | arranges it into `films/Rio (2011)/`, the title from the name when not given |
 | `convert:bmw` | queues a conversion with that profile, of each arranged season or film folder, else of the torrent itself; one label per profile |
+| `redo` | with `convert:`, the jobs get `-y`: convert again over the results already there (a result is replaced only when the new one is complete); without it a video converted before is skipped. For a folder already in the library: `enqueue.py --labels "convert:bmw-rus,ts,redo" PATH`, which the bot's `/tadd folder …` runs |
 | `ts` | with `convert:`, the jobs get `--timestamp`: the time from the start of each video, `mm:ss` (`hh:mm:ss` for an hour or longer), in the top right corner of the result, white with a black outline. `convert_eng.py` writes it as an ASS file with an event a second, laid out for the picture's final size, and libass burns it in after the subtitles, so the worker needs no font file of its own. The result goes to the same folder: a video converted without it is not converted again (`-y` would) |
 
 Arranging uses hardlinks: no extra space, the torrent keeps seeding from where

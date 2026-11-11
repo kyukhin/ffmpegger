@@ -8,6 +8,7 @@ The torrent's labels (set by the bot) say what to do, wherever it was downloaded
     convert:<profile> queue a conversion, of the arranged season folders when it was arranged;
                       one label per profile
     ts                with convert: the time from the start in the corner (convert_eng.py --timestamp)
+    redo              with convert: convert again over the results already there (convert_eng.py -y)
 Without labels, a torrent inside a profile's folder (profiles.json) is queued with that profile.
 
     enqueue.py --library /mnt/lib                       # Transmission: TR_TORRENT_DIR, _NAME, _LABELS
@@ -70,9 +71,10 @@ def log(library, line):
 
 
 def parse_labels(text):
-    """"show:Better Call Saul,convert:bmw,convert:web,ts" -> {"show": ..., "film": ..., "convert": [...], "ts": True}.
-    Transmission gives a script the labels comma separated; a label of its own (say "kids") is ignored."""
-    out = {"show": None, "film": None, "convert": [], "ts": False}
+    """"show:Better Call Saul,convert:bmw,convert:web,ts" -> {"show": ..., "film": ..., "convert": [...], "ts": True,
+    "redo": False}. Transmission gives a script the labels comma separated; a label of its own (say "kids") is
+    ignored."""
+    out = {"show": None, "film": None, "convert": [], "ts": False, "redo": False}
     for label in (text or "").split(","):
         key, _, value = label.strip().partition(":")
         key, value = key.strip().lower(), value.strip()
@@ -82,14 +84,15 @@ def parse_labels(text):
             out["film"] = value or True
         elif key == "convert" and value:
             out["convert"] += [v.strip() for v in value.split("+") if v.strip()]
-        elif key == "ts" and not value:
-            out["ts"] = True
+        elif key in ("ts", "redo") and not value:
+            out[key] = True
     return out
 
 
-def queue(library, cfg, rel, name, is_dir, timestamp=False):
+def queue(library, cfg, rel, name, is_dir, timestamp=False, redo=False):
     """Writes the job unless the same source is already waiting or running for this profile. timestamp: the
-    time from the start in the corner, for this job only."""
+    time from the start in the corner; redo: over the results already there (a result is replaced only when
+    the new one is complete); for this job only."""
     for state in ("queue", "running"):
         for job_id, job in jobs.listing(library, state):
             if job.get("path") == rel and job.get("profile") == name:
@@ -101,12 +104,15 @@ def queue(library, cfg, rel, name, is_dir, timestamp=False):
         "path": rel,
         "profile": name,
         "output": output_of(cfg, name, rel, is_dir),
-        "args": cfg.get("common", []) + cfg["profiles"][name]["args"] + (["--timestamp"] if timestamp else []),
+        "args": cfg.get("common", []) + cfg["profiles"][name]["args"] + (["--timestamp"] if timestamp else [])
+                + (["-y"] if redo else []),
         "timestamp": timestamp,
+        "redo": redo,
         "queued": jobs.now(),
         "server": os.uname().nodename if hasattr(os, "uname") else "",
     })
-    log(library, "queued %s%s as %s: %s" % (name, " with the time" if timestamp else "", job_id, rel))
+    log(library, "queued %s%s%s as %s: %s" % (name, " with the time" if timestamp else "",
+                                               " over the results there" if redo else "", job_id, rel))
 
 
 def main(argv=None):
@@ -117,6 +123,7 @@ def main(argv=None):
     p.add_argument("--labels", help="as Transmission's labels, comma separated; default: $TR_TORRENT_LABELS")
     p.add_argument("--series", default="series", help="the shows' folder in the library, default series")
     p.add_argument("--timestamp", action="store_true", help="the time from the start in the corner, as the ts label")
+    p.add_argument("--redo", action="store_true", help="convert again over the results there, as the redo label")
     p.add_argument("path", nargs="?", help="default: $TR_TORRENT_DIR/$TR_TORRENT_NAME")
     a = p.parse_args(argv)
 
@@ -164,7 +171,8 @@ def main(argv=None):
 
     for name in names:
         for source, is_dir in sources:
-            queue(library, cfg, source, name, is_dir, timestamp=a.timestamp or labels["ts"])
+            queue(library, cfg, source, name, is_dir, timestamp=a.timestamp or labels["ts"],
+                  redo=a.redo or labels["redo"])
     return 1 if unknown else 0
 
 
