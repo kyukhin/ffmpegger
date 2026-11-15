@@ -523,3 +523,26 @@ def test_season_named_by_its_folder(tmp_path, monkeypatch):
     # Again: there already, not a clash with itself, and not queued twice
     assert enqueue.main(args) == 0
     assert len(jobs.listing(str(lib), "queue")) == 1
+
+
+def test_last_words_of_the_latest_run(tmp_path):
+    log = tmp_path / "job.log"
+    log.write_text("=== 1 on pc: convert\nERROR: old trouble\n=== 2 on pc: convert\nINFO: Searching\n"
+                   "DBG: Entering x\nERROR: ffmpeg failed: no space left\nINFO: done\n"
+                   "=== 3 on pc: convert\nINFO: Searching\nDBG: Entering x\nNo videos found. Exiting\n\n")
+    assert worker.last_words(str(log)) == "No videos found. Exiting"
+    log.write_text(log.read_text().rsplit("=== 3", 1)[0])
+    assert worker.last_words(str(log)) == "ERROR: ffmpeg failed: no space left"
+    assert worker.last_words(str(tmp_path / "missing.log")) == ""
+
+
+def test_failed_job_says_why(tmp_path):
+    lib = tmp_path / "lib"
+    touch(lib / "films" / "Cars.BDRemux" / "BDMV" / "STREAM" / "00001.m2ts")
+    touch(lib / "films" / "Cars.BDRemux" / "BDMV" / "STREAM" / "00002.m2ts")
+    put(lib, "1-disc", path="films/Cars.BDRemux", output="0conv/bmw/films/Cars.BDRemux")
+    assert worker.main(worker_args(lib, tmp_path)) == 0
+    [(_, job)] = jobs.listing(str(lib), "failed")
+    assert job["exit"] == 2
+    assert job["reason"] == ("No videos found: a Blu-ray disc (BDMV): 2 .m2ts, only .avi .m4v .mkv .mp4 are "
+                             "converted. Exiting (convert_eng.py exit code 2)")

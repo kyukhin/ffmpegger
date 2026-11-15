@@ -340,6 +340,29 @@ def filter_path(path):
         path = path.replace(char, "\\" + char)
     return path
 
+OTHER_VIDEO_EXTS = (".m2ts", ".mts", ".ts", ".vob", ".mov", ".wmv", ".webm", ".flv", ".mpg", ".mpeg", ".iso")
+
+
+def why_no_videos(root):
+    """What the folder holds instead of videos, for the message and the bot: a Blu-ray or DVD structure, or
+    files of a kind not converted."""
+    if not isdir(root):
+        return ""
+    found, bdmv, dvd = {}, False, False
+    for path, dirs, files in os.walk(root):
+        bdmv = bdmv or basename(path).upper() == "BDMV"
+        dvd = dvd or basename(path).upper() == "VIDEO_TS"
+        for fn in files:
+            ext = splitext(fn)[1].lower()
+            if ext in OTHER_VIDEO_EXTS:
+                found[ext] = found.get(ext, 0) + 1
+    if not found:
+        return ""
+    files = ", ".join("%d %s" % (n, ext) for ext, n in sorted(found.items(), key=lambda x: -x[1]))
+    disc = "a Blu-ray disc (BDMV): " if bdmv else "a DVD (VIDEO_TS): " if dvd else ""
+    return ": %s%s, only %s are converted" % (disc, files, " ".join(VIDEO_EXTS))
+
+
 def scan_videos(cfg):
     """Videos and English .srt files under root_dir. root_dir can be a single
     video: then its subtitles are the .srt files next to it named after it."""
@@ -801,7 +824,7 @@ def main(argv=None):
         for i in s_list: print(i)
 
     if len(v_list) == 0:
-        print("No videos found. Exiting")
+        print("No videos found%s. Exiting" % why_no_videos(cfg["root_dir"]))
         write_report(cfg, dict(report, finished=now(), status="no videos"))
         return 2
 

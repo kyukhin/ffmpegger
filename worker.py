@@ -699,6 +699,27 @@ def summary(report_path):
                          for v in r.get("videos", []) if v["status"] in ("skipped", "failed")]}
 
 
+def last_words(log_path, limit=200):
+    """Why convert_eng.py stopped, from the log of its latest run: the last ERROR line, else the last line
+    that is not debug output."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    lines = []
+    for line in text.replace("\r", "\n").splitlines():
+        line = line.strip()
+        if line.startswith("=== "):
+            lines = []  # a run starts here, only the latest counts
+        elif line and not line.startswith("DBG"):
+            lines.append(line)
+    words = ([l for l in lines if l.startswith(("ERROR", "FATAL"))] or lines or [""])[-1]
+    return words if len(words) <= limit else words[:limit - 1] + "…"
+
+
 def run(library, job_id, job, priority="normal", name=None):
     src = local_path(library, job["path"])
     report = jobs.file(library, "running", job_id, ".report.json")
@@ -743,7 +764,10 @@ def run(library, job_id, job, priority="normal", name=None):
                     except subprocess.TimeoutExpired:
                         pass
                 release(procs)
-        reason = "" if code == 0 else "convert_eng.py exit code %d" % code
+        # The bot shows the reason: the log's last words say more than the exit code
+        words = "" if code == 0 else last_words(jobs.file(library, "running", job_id, ".log"))
+        reason = "" if code == 0 else ("%s (convert_eng.py exit code %d)" % (words, code) if words
+                                       else "convert_eng.py exit code %d" % code)
         job["seconds"] = round(time.time() - started)
     job.update(finished=jobs.now(), exit=code, reason=reason, result=summary(report))
     state = "done" if code == 0 else "failed"
