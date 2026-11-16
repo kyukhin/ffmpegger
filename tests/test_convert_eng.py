@@ -108,6 +108,7 @@ def test_episode_of(name, ep):
      "Rick.and.Morty.S09E01.There's.Something.About.Morty"),
     ("How to Train Your Dragon (IMAX) 2025  BDRip,720p", "How to Train Your Dragon (IMAX) 2025"),
     ("Марсианин.2015.Extended.Cut.WEB-DL.2160p", "Марсианин.2015.Extended.Cut"),
+    ("Тачки 2.2011.Hybrid.UHD.Blu-Ray.Remux.2160p", "Тачки 2.2011"),
     # Junk words are whole words: Engagement, Russia and Rusty stay
     ("The.Big.Bang.Theory.S04E10.The.Engagement.Reaction.720p", "The.Big.Bang.Theory.S04E10.The.Engagement.Reaction"),
     ("From.Russia.with.Love.1963.Rusty.x264-GROUP", "From.Russia.with.Love.1963.Rusty"),
@@ -129,6 +130,24 @@ def test_episode_of(name, ep):
 def test_tidy_name(stem, tidy):
     assert ce.tidy_name(stem) == tidy
     assert ce.tidy_name(tidy) == tidy
+
+
+@pytest.mark.parametrize("name,folder,new", [
+    ("The Secret Life of Pets 2 (2019) 1080p.mkv", False, "The.Secret.Life.of.Pets.2.2019.mkv"),
+    ("Cars.2006.WEB-DL.OM.KP.1080p-SOFCJ.mkv", False, "Cars.2006.mkv"),
+    ("Тачки 2.2011.Hybrid.UHD.Blu-Ray.Remux.2160p.mkv", False, "Тачки.2.2011.mkv"),
+    ("Kung.Fu.Panda.2008.mkv", False, "Kung.Fu.Panda.2008.mkv"),
+    ("Show.S01.1080p.WEB-DL", True, "Show.S01"),
+    ("Film (2019)", True, "Film.2019"),
+    ("Rick and Morty - 307 - The Ricklantis Mixup.mkv", False, "Rick.and.Morty.307.The.Ricklantis.Mixup.mkv"),
+    ("Spider-Man - Homecoming (2017).mkv", False, "Spider-Man.Homecoming.2017.mkv"),
+    ("Breaking.Bad.s01e02.Cat's.in.the.Bag.mkv", False, "Breaking.Bad.s01e02.Cat's.in.the.Bag.mkv"),
+    ("Fargo_S01_E01_1080p_WEB_DL.mkv", False, "Fargo_S01_E01.mkv"),
+    ("Лекция #5. Генетика [Сапольски, 2010].mkv", False, "Лекция.#5.Генетика.Сапольски.2010.mkv"),
+])
+def test_library_name(name, folder, new):
+    assert ce.library_name(name, folder) == new
+    assert ce.library_name(new, folder) == new
 
 
 def test_tidy_name_pads_numbers():

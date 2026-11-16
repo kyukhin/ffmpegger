@@ -3,9 +3,9 @@
 keeps seeding from where it is and the library takes no extra space:
 
     arrange.py --library /mnt/lib --show "Better Call Saul" /mnt/lib/0unsort/BCS.S01-S02.1080p
-        -> series/Better Call Saul/s01/..., series/Better Call Saul/s02/...
+        -> series/Better.Call.Saul/s01/..., series/Better.Call.Saul/s02/...
     arrange.py --library /mnt/lib --film /mnt/lib/0unsort/Rio.2011.1080p.BluRay.mkv
-        -> films/Rio (2011)/Rio.2011.mkv
+        -> films/Rio.2011/Rio.2011.mkv
 
 --series films/0series puts the shows there instead of series/.
 Episodes go to their season by SxxEyy in the file name, whatever the torrent's
@@ -28,7 +28,8 @@ import sys
 
 from ffmpegger import jobs
 from ffmpegger.convert_eng import (AUDIO_EXTS, ENGLISH, FORCED, SAMPLE, SDH, SUBS_EXTS, VIDEO_EXTS, episode_of,
-                                   folder_season, number_of, number_width, season_episode, tidy_file)
+                                   dotted, folder_season, library_name, number_of, number_width,
+                                   season_episode)
 
 RUSSIAN = re.compile(r"(?:^|[^a-z])(?:ru|rus|russian)(?:[^a-z]|$)", re.IGNORECASE)
 YEAR = re.compile(r"[ ._(\[-]((?:19|20)\d{2})(?=[ ._)\]-]|$)")
@@ -140,7 +141,7 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
         return episodes_in[folder].get(ep)
 
     if show:
-        record["show"] = show = safe(show)
+        record["show"] = show = dotted(safe(show))
         record["where"] = posixpath.join(series.strip("/"), show)
         # The torrent's own folder may be what names the season: Show (3 season)/Show - 301 - Title.mkv
         top = os.path.basename(source) if os.path.isdir(source) else ""
@@ -191,7 +192,7 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
                 record["unplaced"].append(rel)
                 continue
             folder = os.path.join(library, series, show, "s%02d" % ep[0])
-            dst = os.path.join(folder, tidy_file(os.path.basename(full), widths.get(ep[0])))
+            dst = os.path.join(folder, library_name(os.path.basename(full), width=widths.get(ep[0])))
             other = holder(folder, ep)
             if other and not os.path.samefile(full, os.path.join(folder, other)):
                 # Another release of the same episode is there already: keep it, say so
@@ -206,11 +207,11 @@ def arrange(library, source, show=None, film=False, title=None, series="series")
             if record["_rel"](folder) not in record["folders"]:
                 record["folders"].append(record["_rel"](folder))
     else:
-        record["film"] = title = safe(title or film_title(os.path.basename(source)))
+        record["film"] = title = dotted(safe(title or film_title(os.path.basename(source))))
         record["where"] = "films/" + title
         folder = os.path.join(library, "films", title)
         for full, rel in videos:
-            dst = os.path.join(folder, tidy_file(os.path.basename(full)))
+            dst = os.path.join(folder, library_name(os.path.basename(full)))
             link(full, dst, record)
             if len(videos) == 1:
                 add_subs(dst, subs + audio)
@@ -232,7 +233,7 @@ def main(argv=None):
     kind = p.add_mutually_exclusive_group(required=True)
     kind.add_argument("--show", help="the show's name: its folder in --series")
     kind.add_argument("--film", action="store_true", help="a film: films/<title>/")
-    p.add_argument("--title", help="the film's folder, default from the download's name: Rio (2011)")
+    p.add_argument("--title", help="the film's folder, default from the download's name: Rio (2011), as Rio.2011")
     p.add_argument("--series", default="series", help="the shows' folder in the library, default series")
     p.add_argument("source", help="the finished torrent, a folder or a file")
     a = p.parse_args(argv)

@@ -46,7 +46,7 @@ BAD_CHARS = [' ', '(', ')', '[', ']', '\'', '«', '»', ',', '’']
 # Release junk in a file name, word by word: from the first one after the title and the episode on, the
 # rest of the name goes. Quality, source, service, codec, audio, dub, release groups and sites
 JUNK = re.compile(r"""\d{3,4}[pi] | [48]k | uhd | web-?dl(?:rip)? | web-?rip | [bh]d-?rip | br-?rip | blu-?ray
-    | bd-?remux | remux | hdtv(?:rip)? | dvd-?rip | dvd[59] | sat-?rip | tv-?rip | hd-?rip
+    | bd-?remux | remux | hybrid | hdtv(?:rip)? | dvd-?rip | dvd[59] | sat-?rip | tv-?rip | hd-?rip
     | amzn | hmax | dsnp | atvp | nf | [xh]\.?26[45] | hevc | avc | xvid | divx | 10-?bit | sdr | hdr(?:10)?\+?
     | aac[\d.]* | e?ac-?3 | ddp | ddp?\+?\d(?:\.\d)? | dts(?:-hd)? | truehd | atmos | flac
     | \d+x(?:rus|eng|ukr) | mvo | dvo | avo | subs | repack | proper
@@ -323,6 +323,21 @@ def tidy_file(name, width=None):
     """tidy_name of a file name, the extension kept."""
     stem, ext = splitext(name)
     return tidy_name(stem, width) + ext
+
+BETWEEN_WORDS = re.compile(r"[\s()\[\]{}«»,;]+")
+
+def dotted(stem):
+    """A name with dots between its words: spaces, brackets, commas to dots, and a dash standing between
+    words with them: "Rick and Morty - 301 - Pilot" -> "Rick.and.Morty.301.Pilot", "Film (2019)" ->
+    "Film.2019". Spider-Man keeps its dash, Cat's its apostrophe, Fargo_S01 its underscore."""
+    return re.sub(r"[.-]*\.[.-]*", ".", BETWEEN_WORDS.sub(".", stem)).strip(".") or stem
+
+def library_name(name, folder=False, width=None):
+    """The name a video gets in the library: no release junk (tidy_name, width as there), dots between the
+    words. "The Secret Life of Pets 2 (2019) 1080p.mkv" -> "The.Secret.Life.of.Pets.2.2019.mkv". A folder's
+    name keeps no extension: Show.S01.1080p -> Show.S01."""
+    stem, ext = (name, "") if folder else splitext(name)
+    return dotted(tidy_name(stem, width)) + ext
 
 def title_of(stem):
     """What a player shows for a file: its name, dots and underscores as spaces when it has no spaces."""

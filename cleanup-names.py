@@ -21,8 +21,8 @@ import json
 import os
 import sys
 
-from ffmpegger.convert_eng import (AUDIO_EXTS, SUBS_EXTS, VIDEO_EXTS, clean_name, number_width, tidy_name,
-                                   title_of)
+from ffmpegger.convert_eng import (AUDIO_EXTS, SUBS_EXTS, VIDEO_EXTS, clean_name, dotted, number_width,
+                                   tidy_name, title_of)
 
 try:
     from mutagen.mp4 import MP4
@@ -39,7 +39,7 @@ def plan(folder):
     videos = [f for f in files if f.lower().endswith(VIDEO_EXTS)]
     stems = {f: os.path.splitext(f)[0] for f in videos}
     width = number_width(list(stems.values()))
-    new = {f: tidy_name(stems[f], width) for f in videos}
+    new = {f: dotted(tidy_name(stems[f], width)) for f in videos}
     # A subtitle or dub belongs to the video with the longest name it starts with
     owner = {}
     for f in files:

@@ -33,8 +33,8 @@ was downloaded:
 
 | Label | Does |
 |---|---|
-| `show:Better Call Saul` | arranges the episodes into `series/Better Call Saul/s01/`, `s02/`, … by `SxxEyy`; lectures numbered without a season (`Лекция #10`, `Lecture 10`, `1-Title`) into the season their folder names, else one season per folder of them |
-| `film` or `film:Rio (2011)` | arranges it into `films/Rio (2011)/`, the title from the name when not given |
+| `show:Better Call Saul` | arranges the episodes into `series/Better.Call.Saul/s01/`, `s02/`, … by `SxxEyy`; lectures numbered without a season (`Лекция #10`, `Lecture 10`, `1-Title`) into the season their folder names, else one season per folder of them |
+| `film` or `film:Rio (2011)` | arranges it into `films/Rio.2011/`, the title from the name when not given |
 | `convert:bmw` | queues a conversion with that profile, of each arranged season or film folder, else of the torrent itself; one label per profile |
 | `redo` | with `convert:`, the jobs get `-y`: convert again over the results already there (a result is replaced only when the new one is complete); without it a video converted before is skipped. For a folder already in the library: `enqueue.py --labels "convert:bmw-rus,ts,redo" PATH`, which the bot's `/tadd folder …` runs |
 | `ts` | with `convert:`, the jobs get `--timestamp`: the time from the start of each video, `mm:ss` (`hh:mm:ss` for an hour or longer), in the top right corner of the result, white with a black outline. `convert_eng.py` writes it as an ASS file with an event a second, laid out for the picture's final size, and libass burns it in after the subtitles, so the worker needs no font file of its own. The result goes to the same folder: a video converted without it is not converted again (`-y` would) |
@@ -69,7 +69,7 @@ Results go to `0conv/<profile>/` plus the source's path, with its subfolders; a
 profile's `results` names another folder there (web-rus has `"results": "web"`,
 bmw-rus `"bmw"`: a device gets one folder whatever the language, and a video
 converted for one of the two is not converted again for the other):
-`series/Better Call Saul/s01` converts into `0conv/bmw/series/Better Call Saul/s01/`,
+`series/Better.Call.Saul/s01` converts into `0conv/bmw/series/Better.Call.Saul/s01/`,
 a download into `0unsort/0web/Show.S01` into `0conv/web/Show.S01/` (the profile or
 downloads folder is dropped). With `-f` (all profiles) file names lose their
 release junk and special characters become dots; the MP4 title is the clean
@@ -98,6 +98,12 @@ Web (2006)" stays. Brackets go when they hold nothing but junk. Lectures and
 the like numbered without a season get leading zeros when a folder has ten or
 more, so that they sort: `Лекция #5` → `Лекция #05`, `1-Title` → `01-Title`.
 Two videos of a folder that would get one name keep theirs.
+
+In the library the words are joined by dots (`convert_eng.dotted`): spaces,
+brackets and commas become dots, and so does a dash between words, so
+`Rick and Morty - 301 - Pilot.mkv` is `Rick.and.Morty.301.Pilot.mkv` and a film
+goes into `films/Rio.2011/`. Apostrophes, underscores and dashes inside a word
+stay: `Cat's`, `Fargo_S01_E01`, `Spider-Man`.
 
 `cleanup-names.py` brings what is there already in line, the library and the
 results converted from it in every profile's folder:

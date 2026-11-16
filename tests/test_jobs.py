@@ -139,8 +139,8 @@ def test_labels(tmp_path, monkeypatch):
     # A film with its own title, arranged and converted
     monkeypatch.setenv("TR_TORRENT_LABELS", "film:Rio (2011),convert:web")
     assert enqueue.main(args) == 0
-    assert os.path.exists(str(lib / "films" / "Rio (2011)" / "Rio.2011.mkv")) and os.path.exists(movie)
-    assert ("films/Rio (2011)", "0conv/web/films/Rio (2011)") in [(j["path"], j["output"])
+    assert os.path.exists(str(lib / "films" / "Rio.2011" / "Rio.2011.mkv")) and os.path.exists(movie)
+    assert ("films/Rio.2011", "0conv/web/films/Rio.2011") in [(j["path"], j["output"])
                                                                    for _, j in jobs.listing(str(lib), "queue")]
 
     # A label that is not ours: the profile folder decides, as before
@@ -517,9 +517,9 @@ def test_season_named_by_its_folder(tmp_path, monkeypatch):
     monkeypatch.setenv("TR_TORRENT_LABELS", "show:Rick and Morty,convert:web")
     args = ["--library", str(lib), "--profiles", profiles_file(tmp_path)]
     assert enqueue.main(args) == 0
-    assert sorted(os.listdir(str(lib / "series" / "Rick and Morty" / "s03"))) == [
-        "Rick and Morty - 301 - The Rickshank Rickdemption.mkv", "Rick and Morty - 302 - Rickmancing the Stone.mkv"]
-    assert [j["path"] for _, j in jobs.listing(str(lib), "queue")] == ["series/Rick and Morty/s03"]
+    assert sorted(os.listdir(str(lib / "series" / "Rick.and.Morty" / "s03"))) == [
+        "Rick.and.Morty.301.The.Rickshank.Rickdemption.mkv", "Rick.and.Morty.302.Rickmancing.the.Stone.mkv"]
+    assert [j["path"] for _, j in jobs.listing(str(lib), "queue")] == ["series/Rick.and.Morty/s03"]
     # Again: there already, not a clash with itself, and not queued twice
     assert enqueue.main(args) == 0
     assert len(jobs.listing(str(lib), "queue")) == 1

@@ -49,7 +49,7 @@ def output_of(cfg, profile, rel, is_dir):
         0unsort/0web/Show.S01      -> 0conv/web/Show.S01
         0unsort/0web-rus/Show.S01  -> 0conv/web/Show.S01 (web-rus has "results": "web")
         0unsort/0bmw/Rio.mkv       -> 0conv/bmw
-        series/Better Call Saul    -> 0conv/bmw/series/Better Call Saul"""
+        series/Better.Call.Saul    -> 0conv/bmw/series/Better.Call.Saul"""
     folder = rel if is_dir else posixpath.dirname(rel)
     prefixes = [p["folder"].strip("/") for p in cfg["profiles"].values()] + [cfg.get("downloads", "").strip("/")]
     inside = [p for p in prefixes if p and (folder == p or folder.startswith(p + "/"))]

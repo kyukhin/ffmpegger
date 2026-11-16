@@ -78,22 +78,22 @@ def test_lectures(tmp_path):
     r = arrange.arrange(str(lib), str(pack), show="HBB", series="films/0series")
     assert r["folders"] == ["films/0series/HBB/s01", "films/0series/HBB/s02"] and not r["unplaced"]
     assert tree(lib / "films" / "0series") == [
-        "HBB/s01/Биология Лекция #1. Введение [2010].mkv", "HBB/s01/Биология Лекция #2. Эволюция [2010].mkv",
+        "HBB/s01/Биология.Лекция.#1.Введение.2010.mkv", "HBB/s01/Биология.Лекция.#2.Эволюция.2010.mkv",
         "HBB/s02/1-Introduction.mkv", "HBB/s02/1-Introduction.ru.mka",
-        "HBB/s02/2-Evolution of Behavior I.mkv", "HBB/s02/2-Evolution of Behavior I.ru.mka"]
+        "HBB/s02/2-Evolution.of.Behavior.I.mkv", "HBB/s02/2-Evolution.of.Behavior.I.ru.mka"]
 
 
 def test_film(tmp_path):
     lib = tmp_path / "lib"
     movie = touch(lib / "0unsort" / "Rio.2011.1080p.BluRay.x264.mkv")
     r = arrange.arrange(str(lib), movie, film=True)
-    assert r["folders"] == ["films/Rio (2011)"] and r["where"] == "films/Rio (2011)"
+    assert r["folders"] == ["films/Rio.2011"] and r["where"] == "films/Rio.2011"
     folder = lib / "0unsort" / "Big.Fish.2003.1080p"
     touch(folder / "Big.Fish.2003.1080p.mkv")
     touch(folder / "Subs" / "2_English.srt")
     arrange.arrange(str(lib), str(folder), film=True)
-    assert tree(lib / "films") == ["Big Fish (2003)/Big.Fish.2003.en.srt", "Big Fish (2003)/Big.Fish.2003.mkv",
-                                   "Rio (2011)/Rio.2011.mkv"]
+    assert tree(lib / "films") == ["Big.Fish.2003/Big.Fish.2003.en.srt", "Big.Fish.2003/Big.Fish.2003.mkv",
+                                   "Rio.2011/Rio.2011.mkv"]
 
 
 def test_names_lose_release_junk(tmp_path):
@@ -116,7 +116,7 @@ def test_names_lose_release_junk(tmp_path):
         touch(course / ("Лекция #%d. Тема [2010].mkv" % n))
     arrange.arrange(str(lib), str(course), show="Course", series="films/0series")
     assert sorted(os.listdir(str(lib / "films" / "0series" / "Course" / "s01")))[:2] == [
-        "Лекция #01. Тема [2010].mkv", "Лекция #02. Тема [2010].mkv"]
+        "Лекция.#01.Тема.2010.mkv", "Лекция.#02.Тема.2010.mkv"]
 
 
 def test_cli_writes_a_record(tmp_path):
