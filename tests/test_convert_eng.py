@@ -398,13 +398,32 @@ def test_timestamp_layout(tmp_path):
     lines = open(ass).read().splitlines()
     assert "PlayResX: 1920" in lines and "PlayResY: 700" in lines
     assert [line for line in lines if line.startswith("Style: TS,Arial,32,")]
-    events = [line for line in lines if line.startswith("Dialogue:")]
+    events = [line for line in lines if ",TS,," in line]
     assert events[0] == "Dialogue: 0,0:00:00.00,0:00:01.00,TS,,0,0,0,,00:00"
     assert len(events) == 91 and events[-1].endswith(",01:30")
     # An hour or longer: hours from the first second
     ce.timestamp_ass(ass, 1920, 1080, 3600)
-    events = [line for line in open(ass).read().splitlines() if line.startswith("Dialogue:")]
+    events = [line for line in open(ass).read().splitlines() if ",TS,," in line]
     assert events[0].endswith(",00:00:00") and events[-1].endswith(",01:00:00")
+
+
+def test_timestamp_progress_bar(tmp_path):
+    """Under the clock: a frame, a track and a fill whose clip grows from nothing to the whole bar over the video."""
+    ass = str(tmp_path / "t.ass")
+    ce.timestamp_ass(ass, 1920, 700, 90.4)
+    bars = [line for line in open(ass).read().splitlines() if ",BAR,," in line]
+    x, y, w, h = ce.progress_bar_box(1920, 700, False)
+    assert (x + w, y, h) == (1920 - 14, 52, 6) and len(bars) == 3
+    assert all("0:00:00.00,0:01:31.00,BAR" in line for line in bars)
+    clip = "\\clip(%d,%d,%d,%d)\\t(0,90400,\\clip(%d,%d,%d,%d))" % (x, y, x, y + h, x, y, x + w, y + h)
+    assert clip in bars[2]
+    # On the clock's right edge and as wide as it: wider for hh:mm:ss
+    xl, yl, wl, hl = ce.progress_bar_box(1920, 1080, True)
+    assert xl + wl == 1920 - 22 and wl > ce.progress_bar_box(1920, 1080, False)[2]
+    # A video of unknown length has no bar, only the clock
+    ce.timestamp_ass(ass, 1920, 1080, None)
+    text = open(ass).read()
+    assert ",BAR,," not in text and ",TS,," in text
 
 
 def top_right(path):

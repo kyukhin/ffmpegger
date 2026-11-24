@@ -7,6 +7,7 @@ Python 3.8+ and ffmpeg/ffprobe in PATH. See README.md."""
 import argparse
 import datetime
 import json
+import math
 import os
 from os.path import basename, dirname, isdir, join, realpath, relpath, splitext
 import re
@@ -166,7 +167,7 @@ def parse_args(argv=None):
 
     parser.add_argument("-ts", "--timestamp",
                         help="Burn in the time from the start, mm:ss (hh:mm:ss for an hour or longer), "
-                             "in the top right corner.",
+                             "in the top right corner, with a progress bar under it.",
                         action="store_true")
 
     parser.add_argument("-v", "--verbose",
@@ -579,28 +580,53 @@ def clock_text(seconds, hours):
     h, rest = divmod(int(seconds), 3600)
     return ("%02d:%02d:%02d" % (h, rest // 60, rest % 60)) if hours else "%02d:%02d" % (rest // 60, rest % 60)
 
+def progress_bar_box(width, height, hours):
+    """Where the progress bar goes: (x, y, w, h) in the picture's pixels, right under the clock, as wide as the
+    clock (Arial digits are 0.556 em, the colon 0.278 em) and right-aligned with it."""
+    size, margin = max(16, round(height * 0.045)), max(8, round(height * 0.02))
+    w = round(size * (4.0 if hours else 2.6))
+    return width - margin - w, margin + round(size * 1.2), w, max(4, round(size * 0.2))
+
 def timestamp_ass(path, width, height, seconds):
     """The time from the start as ASS subtitles, one event a second, in the top right corner, white with a
     black outline: libass burns it in as it burns subtitles, so no font file has to be found on the worker.
-    hh: when the video is an hour or longer; a video of unknown length gets 6 hours of it."""
+    hh: when the video is an hour or longer; a video of unknown length gets 6 hours of it.
+    Under the clock a progress bar: a black frame, a grey track and a white fill that one \\clip animation
+    grows over the whole video (vector drawings, so no font either). A video of unknown length gets no bar."""
+    known = bool(seconds)
     seconds = seconds or 6 * 3600
     hours = seconds >= 3600
     size, margin = max(16, round(height * 0.045)), max(8, round(height * 0.02))
+    style = ("Style: %s,Arial," + "%d,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,%d,0,9,%d,%d,%d,1"
+             % (size, max(1, size // 16), margin, margin, margin))
     head = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: %d" % width, "PlayResY: %d" % height,
             "ScaledBorderAndShadow: yes", "WrapStyle: 2", "",
             "[V4+ Styles]",
             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
             "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
             "Alignment, MarginL, MarginR, MarginV, Encoding",
-            "Style: TS,Arial,%d,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,%d,0,9,%d,%d,%d,1"
-            % (size, max(1, size // 16), margin, margin, margin),
+            style % "TS", style % "BAR",
             "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
 
     def at(t):
         return "%d:%02d:%02d.00" % (t // 3600, t % 3600 // 60, t % 60)
 
+    def rect(x, y, w, h, layer, colour, end, clip=""):
+        """A filled rectangle from the first second to end: a vector drawing placed at x, y."""
+        return ("Dialogue: %d,0:00:00.00,%s,BAR,,0,0,0,,{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c&H%s&%s}"
+                "m 0 0 l %d 0 l %d %d l 0 %d\n" % (layer, end, x, y, colour, clip, w, w, h, h))
+
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(head) + "\n")
+        if known:
+            x, y, w, h = progress_bar_box(width, height, hours)
+            frame, end = max(1, h // 4), at(math.ceil(seconds))
+            f.write(rect(x - frame, y - frame, w + 2 * frame, h + 2 * frame, 0, "000000", end))
+            f.write(rect(x, y, w, h, 1, "606060", end))
+            # The fill is the whole bar, clipped to nothing at the start and to all of it at the end
+            f.write(rect(x, y, w, h, 2, "FFFFFF", end,
+                         "\\clip(%d,%d,%d,%d)\\t(0,%d,\\clip(%d,%d,%d,%d))"
+                         % (x, y, x, y + h, round(seconds * 1000), x, y, x + w, y + h)))
         for t in range(int(seconds) + 1):
             f.write("Dialogue: 0,%s,%s,TS,,0,0,0,,%s\n" % (at(t), at(t + 1), clock_text(t, hours)))
 
